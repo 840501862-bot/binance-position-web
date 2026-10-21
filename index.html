@@ -228,6 +228,19 @@ async function signedPost(apiKey, apiSecret, path, params){
   throw new Error("下单失败：重试后仍失败");
 }
 
+/* ============ 账户持仓模式（双向对冲/单向）缓存 ============ */
+const dualSideCache = {};   // apiKey -> bool（双向模式）
+async function getDualSide(apiKey, apiSecret){
+  if (apiKey in dualSideCache) return dualSideCache[apiKey];
+  const data = await signedGet(apiKey, apiSecret, "/fapi/v2/account");
+  dualSideCache[apiKey] = !!data.dualSidePosition;
+  return dualSideCache[apiKey];
+}
+async function positionSideFor(apiKey, apiSecret){
+  // 双向模式 -> "LONG"（本工具只做多单）；单向模式 -> "BOTH"
+  return (await getDualSide(apiKey, apiSecret)) ? "LONG" : "BOTH";
+}
+
 /* ============ 交易规则缓存（exchangeInfo） ============ */
 let exInfo = null;      // symbol -> {minNotional, stepSize, qPrec, pPrec}
 async function ensureExInfo(){
@@ -540,9 +553,11 @@ async function doAdd(acctCfg, sym, acct, row){
   }
   qty = Math.round(qty * Math.pow(10, ruleInfo.qPrec)) / Math.pow(10, ruleInfo.qPrec);
   if (qty <= 0) throw new Error("计算下单数量为 0，无法下单");
+  const posSide = await positionSideFor(acctCfg.key, acctCfg.secret);
   const params = {
     symbol: sym, side: "BUY", type: "MARKET",
     quantity: qty.toFixed(ruleInfo.qPrec),
+    positionSide: posSide,
     newOrderRespType: "FULL",
   };
   const result = await signedPost(acctCfg.key, acctCfg.secret, "/fapi/v1/order", params);
@@ -569,6 +584,7 @@ async function placeStopLoss(acctCfg, sym, side, stopPriceStr){
   // 仓位级全仓平仓止损单（Algo Order API）
   const clientAlgoId = "SL" + Array.from(crypto.getRandomValues(new Uint8Array(15)),
     b => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+  const posSide = await positionSideFor(acctCfg.key, acctCfg.secret);
   const params = {
     algoType: "CONDITIONAL",
     symbol: sym,
@@ -576,6 +592,7 @@ async function placeStopLoss(acctCfg, sym, side, stopPriceStr){
     type: "STOP_MARKET",
     triggerPrice: stopPriceStr,
     closePosition: "true",
+    positionSide: posSide,
     clientAlgoId: clientAlgoId.slice(0, 32),
   };
   const r = await signedPost(acctCfg.key, acctCfg.secret, "/fapi/v1/algoOrder", params);
