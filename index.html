@@ -143,10 +143,9 @@
 <!-- 设置弹窗 -->
 <div class="mask" id="settingsMask">
   <div class="modal">
-    <h3>设置 · 密钥与代理</h3>
+    <h3>设置 · 代理与 API 地址</h3>
     <div class="body">
-      <table class="settings" id="settingsTable"></table>
-      <div style="margin-top:10px; display:flex; align-items:center; gap:8px;">
+      <div style="margin-top:4px; display:flex; align-items:center; gap:8px;">
         <label style="width:56px;">代理地址</label>
         <input type="text" id="proxyInput" style="flex:1;"
                placeholder="如 http://127.0.0.1:7890，留空自动探测">
@@ -156,7 +155,7 @@
         <input type="text" id="apiBaseInput" style="flex:1;"
                placeholder="默认 http://127.0.0.1:8765（部署页指向本机服务）">
       </div>
-      <div class="hint">密钥与代理保存到同目录 config.json，下次启动自动读取。本服务仅本机可访问。</div>
+      <div class="hint">API 密钥只需在电脑端 config.json 填写，页面不保存、不显示密钥。代理与 API 地址可在此调整。</div>
     </div>
     <div class="foot">
       <button id="btnTest">测试连接</button>
@@ -258,8 +257,8 @@ async function init() {
     applyGroup();
     // 设置弹窗填充
     buildSettings(st);
-    // 记录哪些账户已配置密钥（决定加仓按钮是否可用）
-    state.configured = st.accounts.map(a => !!(a.api_key && a.api_secret));
+    // 记录哪些账户已配置密钥（决定加仓按钮是否可用；密钥只在电脑端 config.json 配置）
+    state.configured = st.accounts.map(a => !!a.configured);
     $("status").textContent =
       "就绪：已加载 " + st.all_pairs.length + " 个交易对（" + st.groups.length +
       " 组可选），当前显示「" + st.groups[0].label + "」，点击「获取」拉取数据";
@@ -269,20 +268,7 @@ async function init() {
 }
 
 function buildSettings(st) {
-  const tbody = $("settingsTable");
-  tbody.innerHTML = "";
-  st.accounts.forEach((a, i) => {
-    const tr = document.createElement("tr");
-    tr.innerHTML =
-      "<td>" + a.name + "</td>" +
-      "<td><input type='text' placeholder='API Key' data-i='" + i +
-        "' data-f='key' value='" + esc(a.api_key) + "'></td>" +
-      "<td style='width:14px;'></td>" +
-      "<td><input type='password' placeholder='API Secret' data-i='" + i +
-        "' data-f='secret' value='" + esc(a.api_secret) + "'></td>";
-    tbody.appendChild(tr);
-  });
-  $("proxyInput").value = st.proxy || "";
+  $("proxyInput").value = (st && st.proxy) || "";
   $("apiBaseInput").value = localStorage.getItem("apiBase") || "http://127.0.0.1:8765";
 }
 function esc(s) {
@@ -495,24 +481,16 @@ async function onPlanOk() {
 
 // ---------------- 设置 ----------------
 async function onSaveSettings() {
-  const accounts = [];
-  document.querySelectorAll("#settingsTable tr").forEach(tr => {
-    const idx = parseInt(tr.querySelector("input[data-f=key]").dataset.i, 10);
-    accounts[idx] = {
-      api_key: tr.querySelector("input[data-f=key]").value,
-      api_secret: tr.querySelector("input[data-f=secret]").value,
-    };
-  });
   try {
     const res = await api("POST", "/api/config",
-      {accounts, proxy: $("proxyInput").value});
+      {proxy: $("proxyInput").value});
     const savedBase = ($("apiBaseInput").value || "").trim().replace(/\/+$/, "") ||
       "http://127.0.0.1:8765";
     localStorage.setItem("apiBase", savedBase);
     apiBase = savedBase;
     $("status").textContent = res.message;
     const st = await api("GET", "/api/state");
-    state.configured = st.accounts.map(a => !!(a.api_key && a.api_secret));
+    state.configured = st.accounts.map(a => !!a.configured);
     if (state.data) render();
     showInfo("保存成功", res.message);
   } catch (e) {
@@ -541,8 +519,11 @@ $("btnSettings").onclick = async () => {
   try {
     const st = await api("GET", "/api/state");
     buildSettings(st);
-    state.configured = st.accounts.map(a => !!(a.api_key && a.api_secret));
-  } catch (e) { /* 用旧数据 */ }
+    state.configured = st.accounts.map(a => !!a.configured);
+  } catch (e) {
+    $("proxyInput").value = "";
+    $("apiBaseInput").value = localStorage.getItem("apiBase") || "http://127.0.0.1:8765";
+  }
   $("settingsMask").classList.add("show");
 };
 $("btnCloseSettings").onclick = () => hide($("settingsMask"));
