@@ -143,19 +143,10 @@
 <!-- 设置弹窗 -->
 <div class="mask" id="settingsMask">
   <div class="modal">
-    <h3>设置 · 代理与 API 地址</h3>
+    <h3>设置 · 账户密钥</h3>
     <div class="body">
-      <div style="margin-top:4px; display:flex; align-items:center; gap:8px;">
-        <label style="width:56px;">代理地址</label>
-        <input type="text" id="proxyInput" style="flex:1;"
-               placeholder="如 http://127.0.0.1:7890，留空自动探测">
-      </div>
-      <div style="margin-top:10px; display:flex; align-items:center; gap:8px;">
-        <label style="width:56px;">API 地址</label>
-        <input type="text" id="apiBaseInput" style="flex:1;"
-               placeholder="默认 http://127.0.0.1:8765（部署页指向本机服务）">
-      </div>
-      <div class="hint">API 密钥只需在电脑端 config.json 填写，页面不保存、不显示密钥。代理与 API 地址可在此调整。</div>
+      <table class="settings" id="settingsTable"></table>
+      <div class="hint">API 密钥保存到电脑端 config.json，下次启动自动读取。其他设备在同一局域网内访问本服务时，也可在这里填写保存。</div>
     </div>
     <div class="foot">
       <button id="btnTest">测试连接</button>
@@ -200,9 +191,19 @@ const state = {
 const $ = id => document.getElementById(id);
 let groupIndex = 0;
 
-// API 服务地址：默认本机网页版后端；部署到 GitHub Pages 后仍指向本机服务（密钥只在本机）。
-// 可在设置面板里修改，保存在浏览器 localStorage。
-let apiBase = (localStorage.getItem("apiBase") || "http://127.0.0.1:8765").replace(/\/+$/, "");
+// API 服务地址：从 GitHub Pages 打开时默认指向本机后端（127.0.0.1:8765）；
+// 从本机或局域网直接打开服务（如 http://192.168.x.x:8765）时自动用当前地址，
+// 这样其他设备在同一局域网内也能填写密钥、查看仓位。
+function defaultApiBase() {
+  const h = location.hostname || "";
+  if (location.protocol === "http:" &&
+      (h === "127.0.0.1" || h === "localhost" || h.startsWith("192.168.") ||
+       h.startsWith("10.") || /^172\.(1[6-9]|2\d|3[01])\./.test(h))) {
+    return location.origin;
+  }
+  return "http://127.0.0.1:8765";
+}
+let apiBase = (localStorage.getItem("apiBase") || defaultApiBase()).replace(/\/+$/, "");
 
 // ---------------- 工具 ----------------
 function fmtMoney(v) {
@@ -268,8 +269,19 @@ async function init() {
 }
 
 function buildSettings(st) {
-  $("proxyInput").value = (st && st.proxy) || "";
-  $("apiBaseInput").value = localStorage.getItem("apiBase") || "http://127.0.0.1:8765";
+  const tbody = $("settingsTable");
+  tbody.innerHTML = "";
+  st.accounts.forEach((a, i) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      "<td>" + esc(a.name) + "</td>" +
+      "<td><input type='text' placeholder='API Key' data-i='" + i +
+        "' data-f='key' value='" + esc(a.api_key || "") + "'></td>" +
+      "<td style='width:14px;'></td>" +
+      "<td><input type='password' placeholder='API Secret' data-i='" + i +
+        "' data-f='secret' value='" + esc(a.api_secret || "") + "'></td>";
+    tbody.appendChild(tr);
+  });
 }
 function esc(s) {
   return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
@@ -481,13 +493,16 @@ async function onPlanOk() {
 
 // ---------------- 设置 ----------------
 async function onSaveSettings() {
+  const accounts = [];
+  document.querySelectorAll("#settingsTable tr").forEach(tr => {
+    const idx = parseInt(tr.querySelector("input[data-f=key]").dataset.i, 10);
+    accounts[idx] = {
+      api_key: tr.querySelector("input[data-f=key]").value,
+      api_secret: tr.querySelector("input[data-f=secret]").value,
+    };
+  });
   try {
-    const res = await api("POST", "/api/config",
-      {proxy: $("proxyInput").value});
-    const savedBase = ($("apiBaseInput").value || "").trim().replace(/\/+$/, "") ||
-      "http://127.0.0.1:8765";
-    localStorage.setItem("apiBase", savedBase);
-    apiBase = savedBase;
+    const res = await api("POST", "/api/config", {accounts});
     $("status").textContent = res.message;
     const st = await api("GET", "/api/state");
     state.configured = st.accounts.map(a => !!a.configured);
@@ -520,10 +535,7 @@ $("btnSettings").onclick = async () => {
     const st = await api("GET", "/api/state");
     buildSettings(st);
     state.configured = st.accounts.map(a => !!a.configured);
-  } catch (e) {
-    $("proxyInput").value = "";
-    $("apiBaseInput").value = localStorage.getItem("apiBase") || "http://127.0.0.1:8765";
-  }
+  } catch (e) { /* 用旧数据 */ }
   $("settingsMask").classList.add("show");
 };
 $("btnCloseSettings").onclick = () => hide($("settingsMask"));
