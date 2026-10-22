@@ -146,7 +146,7 @@
     <h3>设置 · 账户密钥</h3>
     <div class="body">
       <table class="settings" id="settingsTable"></table>
-      <div class="hint">API 密钥保存到电脑端 config.json，下次启动自动读取。其他设备在同一局域网内访问本服务时，也可在这里填写保存。</div>
+      <div class="hint" id="settingsHint"></div>
     </div>
     <div class="foot">
       <button id="btnTest">测试连接</button>
@@ -264,14 +264,20 @@ async function init() {
       "就绪：已加载 " + st.all_pairs.length + " 个交易对（" + st.groups.length +
       " 组可选），当前显示「" + st.groups[0].label + "」，点击「获取」拉取数据";
   } catch (e) {
-    showInfo("加载失败", String(e));
+    $("status").textContent = "加载失败，当前后端地址：" + apiBase;
+    showInfo("加载失败", String(e.message) + "\n\n当前后端地址：" + apiBase +
+      "\n手机/其他设备请连与电脑同一个 Wi-Fi，用浏览器打开 http://192.168.0.172:8765（页面设置里可填写密钥）。");
   }
 }
 
 function buildSettings(st) {
   const tbody = $("settingsTable");
   tbody.innerHTML = "";
-  st.accounts.forEach((a, i) => {
+  // 后端连不上（如手机外网打开 GitHub 页）时，也先渲染 6 行空输入框，避免窗口空白
+  const accs = (st && st.accounts) ||
+    ["账户1", "账户2", "账户3", "账户4", "账户5", "账户6"]
+      .map(n => ({name: n, api_key: "", api_secret: ""}));
+  accs.forEach((a, i) => {
     const tr = document.createElement("tr");
     tr.innerHTML =
       "<td>" + esc(a.name) + "</td>" +
@@ -282,6 +288,12 @@ function buildSettings(st) {
         "' data-f='secret' value='" + esc(a.api_secret || "") + "'></td>";
     tbody.appendChild(tr);
   });
+  // 提示当前连接的后端地址与填写条件
+  $("settingsHint").textContent =
+    "当前后端地址：" + apiBase + "。密钥保存到电脑端 config.json；" +
+    (st
+      ? "已连接电脑端服务，可直接填写保存。"
+      : "未连上电脑端服务：手机请连与电脑同一个 Wi-Fi，用浏览器打开 http://192.168.0.172:8765 再填密钥。");
 }
 function esc(s) {
   return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
@@ -509,7 +521,8 @@ async function onSaveSettings() {
     if (state.data) render();
     showInfo("保存成功", res.message);
   } catch (e) {
-    showInfo("保存失败", String(e.message));
+    showInfo("保存失败", String(e.message) + "\n\n后端地址：" + apiBase +
+      "\n如手机在 5G/外网，请连与电脑同一个 Wi-Fi 后打开 http://192.168.0.172:8765 再保存。");
   }
 }
 
@@ -535,7 +548,11 @@ $("btnSettings").onclick = async () => {
     const st = await api("GET", "/api/state");
     buildSettings(st);
     state.configured = st.accounts.map(a => !!a.configured);
-  } catch (e) { /* 用旧数据 */ }
+  } catch (e) {
+    // 后端连不上：仍渲染空密钥行，提示用局域网地址
+    buildSettings(null);
+    $("status").textContent = "加载配置失败（" + apiBase + "）：请用同一 Wi-Fi 打开 http://192.168.0.172:8765";
+  }
   $("settingsMask").classList.add("show");
 };
 $("btnCloseSettings").onclick = () => hide($("settingsMask"));
