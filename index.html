@@ -1,649 +1,558 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8">
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>币安主流币仓位 · 6 账户</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23f0b90b'/%3E%3Cpath d='M9 11h4l6 10 6-10h4l-8 14h-4z' fill='%230b0e14'/%3E%3C/svg%3E">
+<title>币安主流币仓位信息 · 网页版</title>
 <style>
-:root{
-  --bg:#0b0e14; --panel:#131722; --panel2:#1a2030; --line:#2c3342; --line2:#3a4356;
-  --text:#d6dae2; --muted:#8a93a6; --gold:#f0b90b; --green:#0ecb81; --red:#f6465d;
-  --head-bg:#1e2536; --btn-bg:#f0b90b; --btn-text:#0b0e14;
-}
-*{box-sizing:border-box; margin:0; padding:0;}
-html,body{height:100%;}
-body{
-  background:var(--bg); color:var(--text);
-  font-family:"Microsoft YaHei UI","PingFang SC","Noto Sans SC",system-ui,sans-serif;
-  font-size:14px; line-height:1.5;
-}
-.wrap{max-width:1560px; margin:0 auto; padding:14px 18px 40px;}
-h1{font-size:20px; font-weight:700; display:flex; align-items:center; gap:10px;}
-h1 .dot{width:14px;height:14px;border-radius:4px;background:var(--gold);}
-.sub{color:var(--muted); font-size:12.5px; margin-top:2px;}
-.bar{display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:12px;}
-.safety{
-  background:#131a12; border:1px solid #2b3d2b; color:#9fd39f; border-radius:8px;
-  padding:8px 12px; font-size:12.5px; max-width:520px;
-}
-.safety b{color:#c8e6c9;}
-.panel{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:12px;}
-.sec-title{font-size:13px; color:var(--muted); margin-bottom:8px; letter-spacing:.5px;}
-/* 账户密钥区 */
-.acct-grid{display:grid; grid-template-columns:repeat(6,1fr); gap:10px;}
-.acct-col{border:1px solid var(--line); border-radius:8px; padding:8px; background:var(--panel2);}
-.acct-col .name{font-weight:700; font-size:13px; margin-bottom:6px; color:var(--gold);}
-.acct-col label{display:block; font-size:11px; color:var(--muted); margin:4px 0 2px;}
-.acct-col input{
-  width:100%; background:#0d1119; color:var(--text); border:1px solid var(--line);
-  border-radius:5px; padding:4px 6px; font-size:12px; font-family:Consolas,monospace;
-}
-.acct-col input:focus{outline:none; border-color:var(--gold);}
-/* 操作行 */
-.ops{display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:12px;}
-button{
-  font-family:inherit; border:none; border-radius:6px; cursor:pointer; font-size:13.5px;
-}
-.btn-primary{background:var(--btn-bg); color:var(--btn-text); font-weight:700; padding:8px 22px;}
-.btn-primary:disabled{opacity:.45; cursor:not-allowed;}
-.btn-ghost{background:transparent; color:var(--text); border:1px solid var(--line2); padding:8px 16px;}
-.btn-ghost:disabled{opacity:.45; cursor:not-allowed;}
-.status{flex:1; min-width:280px; color:var(--muted); font-size:12.5px; background:#10141f; border:1px solid var(--line); border-radius:6px; padding:8px 10px;}
-.status.ok{color:var(--green);} .status.err{color:var(--red);}
-/* 表格 */
-.table-box{overflow:auto; border:1px solid var(--line); border-radius:10px; background:var(--panel);}
-table{border-collapse:collapse; width:100%; font-size:13px; white-space:nowrap;}
-thead th{
-  position:sticky; top:0; background:var(--head-bg); color:var(--text); font-weight:600;
-  padding:7px 8px; border:1px solid var(--line2); text-align:center; z-index:2;
-}
-thead th.pair{text-align:left;}
-thead th.acct-head{background:#24304a; color:#ffd76b;}
-thead th.sep-head{background:var(--head-bg); color:var(--muted); width:10px; padding:0; border:none;}
-tbody td{
-  padding:6px 8px; border:1px solid var(--line); text-align:center;
-  font-variant-numeric:tabular-nums;
-}
-tbody td.pair{text-align:left; font-weight:600; background:var(--panel2);}
-tbody tr.row1{background:#141a27;}
-tbody tr.row2{background:#171e2f;}
-tbody td.sep{width:10px; padding:0; border-left:none; border-right:1px solid var(--line2); background:transparent;}
-tbody td.blank{background:transparent; border:none; padding:3px;}
-td.num{color:var(--text);} td.pos{color:var(--text);}
-td.roi-up{color:var(--green);} td.roi-down{color:var(--red);}
-td.fail{color:var(--red); font-size:12px;}
-td.muted{color:var(--muted);}
-.add-btn{
-  background:var(--btn-bg); color:var(--btn-text); font-weight:700; font-size:12.5px;
-  border-radius:5px; padding:3px 9px; min-width:52px; cursor:pointer;
-}
-.add-btn:hover{filter:brightness(1.1);}
-.add-btn:disabled{opacity:.4; cursor:not-allowed;}
-tbody tr:hover td{background:#1d2740;}
-/* 确认弹窗 */
-.modal-mask{position:fixed; inset:0; background:rgba(5,8,14,.72); display:none; align-items:center; justify-content:center; z-index:50;}
-.modal-mask.show{display:flex;}
-.modal{background:var(--panel); border:1px solid var(--line2); border-radius:12px; width:440px; max-width:92vw; padding:18px 20px;}
-.modal h3{font-size:15px; margin-bottom:12px; color:#ffd76b;}
-.modal .row{display:flex; justify-content:space-between; padding:5px 0; border-bottom:1px dashed var(--line); font-size:13px;}
-.modal .row span:first-child{color:var(--muted);}
-.modal .warn{background:#221a12; border:1px solid #4a3a1a; color:#ffd76b; border-radius:6px; padding:8px 10px; font-size:12.5px; margin:12px 0;}
-.modal .btns{display:flex; gap:10px; justify-content:flex-end; margin-top:14px;}
-.foot{color:var(--muted); font-size:12px; margin-top:14px; line-height:1.8;}
-.foot code{background:#10141f; border:1px solid var(--line); border-radius:4px; padding:1px 5px;}
-@media (max-width:1100px){
-  .acct-grid{grid-template-columns:repeat(3,1fr);}
-}
-@media (max-width:640px){
-  .acct-grid{grid-template-columns:repeat(2,1fr);}
-  .bar{flex-direction:column;}
-  .wrap{padding:10px;}
-}
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
+    font-size: 13px; color: #d5dee8; background: #0c1e3e;
+    min-height: 100vh; display: flex; flex-direction: column;
+  }
+  .mono { font-variant-numeric: tabular-nums; font-family: Consolas, "Microsoft YaHei UI", monospace; }
+
+  header {
+    background: linear-gradient(180deg, #0e1a2c, #0a1322);
+    border-bottom: 1px solid #20334d;
+    padding: 10px 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 16px; font-weight: 600; color: #eaf2ff; letter-spacing: .5px; margin-right: auto; }
+  header .sub { color: #5f7d9e; font-size: 12px; }
+
+  .toolbar {
+    background: #0a1322; border-bottom: 1px solid #20334d;
+    padding: 8px 16px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  }
+  .toolbar label { color: #7d93ab; }
+  select, input[type=text], input[type=password] {
+    border: 1px solid #2b4a6e; border-radius: 4px; padding: 5px 8px;
+    font-size: 13px; background: #0e1b33; color: #d5dee8; outline: none;
+  }
+  select:focus, input:focus { border-color: #2f8cff; box-shadow: 0 0 0 2px rgba(47,140,255,.15); }
+  button {
+    border: 1px solid #2a4d7f; border-radius: 4px; padding: 5px 14px;
+    background: #142543; color: #9cc3ff; cursor: pointer; font-size: 13px;
+  }
+  button:hover { border-color: #2f8cff; color: #cfe3ff; }
+  button:disabled { opacity: .55; cursor: not-allowed; }
+  button.primary {
+    background: linear-gradient(180deg, #1e7bff, #1460e0); border-color: #2f8cff;
+    color: #fff; box-shadow: 0 0 10px rgba(30,123,255,.35);
+  }
+  button.primary:hover { background: linear-gradient(180deg, #2f8cff, #1e6ef0); color: #fff; }
+  button.danger { background: #d92b45; border-color: #ff4d6d; color: #fff; }
+  button.danger:hover { background: #f03650; color: #fff; }
+
+  main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+  .table-wrap { flex: 1; overflow: auto; position: relative; background: #0c1e3e; }
+  table { border-collapse: collapse; width: 100%; min-width: 1750px; }
+  thead th {
+    position: sticky; top: 0; z-index: 2;
+    background: #1a3a6e; border-bottom: 1px solid #2c5aa8;
+    padding: 7px 6px; font-weight: 600; white-space: nowrap; color: #8fa8c4;
+  }
+  thead th.acct-head { text-align: center; color: #c9ddf5; }
+  thead th.acct-head .tag { display: inline-block; font-size: 11px; font-weight: 400;
+    border-radius: 3px; padding: 0 5px; margin-left: 4px; }
+  .tag.ok { background: rgba(61,220,151,.15); color: #3ddc97; }
+  .tag.err { background: rgba(255,84,112,.16); color: #ff5470; }
+  .tag.na  { background: rgba(125,147,171,.15); color: #7d93ab; }
+  tbody td { border-bottom: 1px solid #2E6FBF; padding: 8px 6px; white-space: nowrap; }
+  tbody tr.stripe-0 { background: #3A7BD5; }
+  tbody tr.stripe-1 { background: #4B8EDD; }
+  tbody tr:hover { background: #5B9BE0; }
+  /* 不同币种之间的空行分隔（与桌面版一致） */
+  tbody tr.coin-gap td { background: #0c1e3e; height: 18px; padding: 0; border: none; }
+  tbody tr.coin-gap:hover td { background: #0c1e3e; }
+  td.sym { font-weight: 600; color: #ffffff; padding-left: 10px; background: #1b4fa0; }
+  thead th.sym { background: #1b4fa0; color: #ffffff; border-bottom: 1px solid #2c5aa8; }
+  td.num, th.num { text-align: right; color: #c3d1e2; }
+  td.center, th.center { text-align: center; }
+  td.sep { background: #3A7BD5; padding: 0; width: 2px !important; }
+  td .btn-add {
+    min-width: 58px; padding: 2px 10px; font-size: 12px; background: #16335f;
+    border-color: #2a5ca0; color: #6fb0ff;
+  }
+  td .btn-add:hover { background: #1a4d8f; color: #fff; }
+  .pos-up { color: #ff5470; font-weight: 600; }
+  .pos-dn { color: #3ddc97; font-weight: 600; }
+  .empty { text-align: center; padding: 40px 0; color: #5f7d9e; }
+
+  footer {
+    background: #0a1322; border-top: 1px solid #20334d;
+    padding: 7px 16px; font-size: 12px; color: #7d93ab;
+    display: flex; gap: 18px; flex-wrap: wrap; align-items: baseline;
+  }
+  footer .summary { color: #c9ddf5; }
+  #status { color: #4dc3ff; }
+
+  /* 弹窗 */
+  .mask {
+    position: fixed; inset: 0; background: rgba(3, 6, 12, .7);
+    display: none; align-items: center; justify-content: center; z-index: 50;
+  }
+  .mask.show { display: flex; }
+  .modal {
+    background: #0f1a30; border: 1px solid #27405f; border-radius: 8px;
+    width: min(640px, 92vw); max-height: 86vh; overflow: auto;
+    box-shadow: 0 8px 32px rgba(0,0,0,.6);
+  }
+  .modal h3 { padding: 14px 18px; border-bottom: 1px solid #20334d; font-size: 15px; color: #eaf2ff; }
+  .modal .body { padding: 14px 18px; font-size: 13px; line-height: 1.8; white-space: pre-wrap; color: #d5dee8; }
+  .modal .foot { padding: 12px 18px; border-top: 1px solid #20334d;
+    display: flex; justify-content: flex-end; gap: 10px; }
+  .modal table.settings { width: 100%; border-collapse: collapse; min-width: 0; }
+  .modal table.settings td { padding: 5px 6px; border-bottom: none; }
+  .modal table.settings td:first-child { width: 56px; font-weight: 600; white-space: nowrap; color: #c9ddf5; }
+  .modal table.settings input { width: 100%; }
+  .hint { color: #5f7d9e; font-size: 12px; margin-top: 10px; }
+  #testResult { white-space: pre-wrap; font-family: Consolas, monospace; font-size: 12px; }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="bar">
-    <div>
-      <h1><span class="dot"></span>币安主流币仓位 · 6 账户</h1>
-      <div class="sub">只统计多单 · 按账户仓位个数从多到少排序 · 每个账户独立加仓/止损</div>
-    </div>
-    <div class="safety">
-      <b>安全提示：</b>密钥仅保存在<b>当前浏览器本地</b>（localStorage），绝不写入本页代码、不上传任何服务器。
-      建议 API Key 绑定 IP 白名单，勿开通提现/划转权限。
-    </div>
-  </div>
 
-  <div class="panel">
-    <div class="sec-title">账户密钥（只填要使用的账户，点「保存密钥」后留在本浏览器）</div>
-    <div class="acct-grid" id="acctGrid"></div>
-    <div class="ops" style="margin-top:12px;">
-      <button class="btn-ghost" id="btnSave">保存密钥</button>
-      <button class="btn-ghost" id="btnClear">清空密钥</button>
-      <button class="btn-primary" id="btnFetch">获取持仓</button>
-      <button class="btn-ghost" id="btnTest">测试连接</button>
-      <div class="status" id="status">就绪：填入账户密钥后点击「获取持仓」</div>
-    </div>
-  </div>
+<header>
+  <h1>币安主流币仓位信息 <span class="sub">网页版 · 6 账户 · 只统计多单</span></h1>
+  <button id="btnSettings">设置</button>
+</header>
 
-  <div class="table-box">
-    <table id="posTable">
-      <thead id="posHead"></thead>
-      <tbody id="posBody"></tbody>
+<div class="toolbar">
+  <label for="groupSel">币对分组</label>
+  <select id="groupSel"></select>
+  <button id="btnFetch" class="primary">获取</button>
+  <span id="status">就绪：正在加载配置…</span>
+</div>
+
+<main>
+  <div class="table-wrap" id="tableWrap">
+    <table id="grid">
+      <thead><tr id="headRow"></tr></thead>
+      <tbody id="gridBody"></tbody>
     </table>
+    <div class="empty" id="emptyHint">点击「获取」拉取各账户仓位</div>
   </div>
+</main>
 
-  <div class="foot">
-    说明：持仓数量(USDT) = 多单数量 × 标记价格；投资回报率 = 未实现盈亏 ÷ 持仓保证金 × 100。<br>
-    「加仓」= 市价单等量加仓（仓位翻倍）；当前无多单时按「最少开仓金额+1 USDT」开仓；加仓后自动设置「浮盈回撤 50% 仓位止损」。
-    排序规则：USDT/USDC 分别计数，账户仓位个数从多到少，个数相同按总金额从多到少。
-    网页版经浏览器直连币安（需网络可达币安，连不上时请确保浏览器代理/VPN 已开启）。
+<footer>
+  <span class="summary" id="summary"></span>
+  <span id="cleaned"></span>
+</footer>
+
+<!-- 设置弹窗 -->
+<div class="mask" id="settingsMask">
+  <div class="modal">
+    <h3>设置 · 密钥与代理</h3>
+    <div class="body">
+      <table class="settings" id="settingsTable"></table>
+      <div style="margin-top:10px; display:flex; align-items:center; gap:8px;">
+        <label style="width:56px;">代理地址</label>
+        <input type="text" id="proxyInput" style="flex:1;"
+               placeholder="如 http://127.0.0.1:7890，留空自动探测">
+      </div>
+      <div style="margin-top:10px; display:flex; align-items:center; gap:8px;">
+        <label style="width:56px;">API 地址</label>
+        <input type="text" id="apiBaseInput" style="flex:1;"
+               placeholder="默认 http://127.0.0.1:8765（部署页指向本机服务）">
+      </div>
+      <div class="hint">密钥与代理保存到同目录 config.json，下次启动自动读取。本服务仅本机可访问。</div>
+    </div>
+    <div class="foot">
+      <button id="btnTest">测试连接</button>
+      <button id="btnSave">保存设置</button>
+      <button id="btnCloseSettings">关闭</button>
+    </div>
   </div>
 </div>
 
-<div class="modal-mask" id="modalMask">
-  <div class="modal" id="modalBox"></div>
+<!-- 计划确认弹窗 -->
+<div class="mask" id="planMask">
+  <div class="modal">
+    <h3 id="planTitle">执行确认</h3>
+    <div class="body" id="planBody"></div>
+    <div class="foot">
+      <button id="btnPlanCancel">取消</button>
+      <button id="btnPlanOk" class="danger">确认执行</button>
+    </div>
+  </div>
+</div>
+
+<!-- 结果弹窗 -->
+<div class="mask" id="infoMask">
+  <div class="modal">
+    <h3 id="infoTitle">提示</h3>
+    <div class="body" id="infoBody"></div>
+    <div class="foot"><button id="btnInfoOk">知道了</button></div>
+  </div>
 </div>
 
 <script>
 "use strict";
-/* ============ 常量与交易对列表（与桌面版 主流币.txt 一致） ============ */
-const ACCOUNT_COUNT = 6;
-const ACCOUNT_NAMES = Array.from({length: ACCOUNT_COUNT}, (_, i) => "账户" + (i + 1));
-const FAPI = "https://fapi.binance.com";
-const RAW_PAIRS = ["NEOUSDC","ETHFIUSDC","1000BONKUSDC","ORDIUSDC","KAITOUSDC","BIOUSDC","WLFIUSDC","PNUTUSDC","BCHUSDC","BOMEUSDC","LTCUSDC","PENGUUSDC","CRVUSDC","TRUMPUSDC","HBARUSDC","1000SHIBUSDC","WIFUSDC","UNIUSDC","SUIUSDC","WLDUSDC","AVAXUSDC","1000PEPEUSDC","ARBUSDC","LINKUSDC","AAVEUSDC","ADAUSDC","SOLUSDC","ZECUSDC","XRPUSDC","NEARUSDC","BNBUSDC","ENAUSDC","FILUSDC","DOGEUSDC","TIAUSDC","NEOUSDT","ETHFIUSDT","1000BONKUSDT","ORDIUSDT","KAITOUSDT","BIOUSDT","WLFIUSDT","PNUTUSDT","BCHUSDT","BOMEUSDT","LTCUSDT","PENGUUSDT","CRVUSDT","TRUMPUSDT","HBARUSDT","1000SHIBUSDT","WIFUSDT","UNIUSDT","SUIUSDT","WLDUSDT","AVAXUSDT","1000PEPEUSDT","ARBUSDT","LINKUSDT","AAVEUSDT","ADAUSDT","SOLUSDT","ZECUSDT","XRPUSDT","NEARUSDT","BNBUSDT","ENAUSDT","FILUSDT","DOGEUSDT","TIAUSDT"];
 
-/* ============ 工具函数 ============ */
+// ---------------- 全局状态 ----------------
+const state = {
+  groups: [],            // [{label, pairs}]
+  groupPairs: new Set(), // 当前分组包含的交易对
+  data: null,            // 最近一次 /api/fetch 的结果
+  configured: [],        // 每账户是否已配置密钥（决定加仓按钮是否可用）
+  fetching: false,
+};
 const $ = id => document.getElementById(id);
-function toFloat(v, d = 0){ const n = parseFloat(v); return isFinite(n) ? n : d; }
-function fmt(n){ return n.toLocaleString("en-US", {minimumFractionDigits:2, maximumFractionDigits:2}); }
+let groupIndex = 0;
 
-/* ============ 币安签名请求（Web Crypto） ============ */
-let serverOffset = 0;       // 服务器时间 - 本地时间(ms)
-let offsetSynced = false;
+// API 服务地址：默认本机网页版后端；部署到 GitHub Pages 后仍指向本机服务（密钥只在本机）。
+// 可在设置面板里修改，保存在浏览器 localStorage。
+let apiBase = (localStorage.getItem("apiBase") || "http://127.0.0.1:8765").replace(/\/+$/, "");
 
-async function syncServerTime(){
-  const r = await fetch(FAPI + "/fapi/v1/time");
-  const j = await r.json();
-  serverOffset = toFloat(j.serverTime) - Date.now();
-  offsetSynced = true;
-  return serverOffset;
+// ---------------- 工具 ----------------
+function fmtMoney(v) {
+  if (v == null || !isFinite(v) || v <= 0) return "";
+  return v.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2});
 }
-async function nowMs(){
-  if (!offsetSynced){
-    try{ await syncServerTime(); }catch(e){ serverOffset = 0; }
+function fmtRoi(v) {
+  if (v == null || !isFinite(v)) return "";
+  return (v > 0 ? "+" : "") + v.toFixed(2) + "%";
+}
+function roiClass(v) {
+  if (v == null || !isFinite(v) || v === 0) return "";
+  return v > 0 ? "pos-up" : "pos-dn";
+}
+async function api(method, url, body) {
+  const opts = {method, headers: {}};
+  if (body !== undefined) {
+    opts.headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(body);
   }
-  return Date.now() + serverOffset;
-}
-function enc(s){
-  return encodeURIComponent(s).replace(/!/g, "%21").replace(/'/g, "%27")
-    .replace(/\(/g, "%28").replace(/\)/g, "%29").replace(/\*/g, "%2A");
-}
-function buildQuery(params){
-  return Object.keys(params).sort().map(k => enc(k) + "=" + enc(params[k])).join("&");
-}
-async function hmacSha256(secret, text){
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret),
-    {name:"HMAC", hash:"SHA-256"}, false, ["sign"]);
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, "0")).join("");
-}
-async function signedGet(apiKey, apiSecret, path, extra = {}){
-  for (let attempt = 0; attempt < 2; attempt++){
-    const params = {timestamp: await nowMs(), recvWindow: 10000, ...extra};
-    const qs = buildQuery(params);
-    const sig = await hmacSha256(apiSecret, qs);
-    const url = FAPI + path + "?" + qs + "&signature=" + sig;
-    const r = await fetch(url, {headers: {"X-MBX-APIKEY": apiKey}});
-    let j; try{ j = await r.json(); }catch(e){ throw new Error("响应解析失败（HTTP " + r.status + "）"); }
-    if (j && j.code === -1021 && attempt === 0){
-      offsetSynced = false; await syncServerTime(); continue;   // 时间偏移重同步重试
-    }
-    if (!r.ok || (j && typeof j === "object" && j.code !== undefined && j.code !== null)){
-      const code = j && j.code !== undefined ? j.code : r.status;
-      throw new Error("接口错误（code " + code + "）：" + (j && j.msg ? j.msg : "HTTP " + r.status));
-    }
-    return j;
+  const resp = await fetch(apiBase + url, opts);
+  let data;
+  try { data = await resp.json(); } catch (e) { data = {}; }
+  if (!resp.ok || data.ok === false) {
+    throw new Error(data.error || ("HTTP " + resp.status));
   }
-  throw new Error("请求失败：重试后仍失败");
+  return data;
 }
-async function signedPost(apiKey, apiSecret, path, params){
-  for (let attempt = 0; attempt < 2; attempt++){
-    const full = {timestamp: await nowMs(), recvWindow: 10000, ...params};
-    const qs = buildQuery(full);
-    const sig = await hmacSha256(apiSecret, qs);
-    const url = FAPI + path + "?" + qs + "&signature=" + sig;
-    const r = await fetch(url, {method: "POST", headers: {"X-MBX-APIKEY": apiKey}});
-    let j; try{ j = await r.json(); }catch(e){ throw new Error("响应解析失败（HTTP " + r.status + "）"); }
-    if (j && j.code === -1021 && attempt === 0){
-      offsetSynced = false; await syncServerTime(); continue;
-    }
-    if (!r.ok || (j && typeof j === "object" && j.code !== undefined && j.code !== null)){
-      const code = j && j.code !== undefined ? j.code : r.status;
-      throw new Error("下单失败（code " + code + "）：" + (j && j.msg ? j.msg : "HTTP " + r.status));
-    }
-    return j;
+function showInfo(title, body) {
+  $("infoTitle").textContent = title;
+  $("infoBody").textContent = body;
+  $("infoMask").classList.add("show");
+}
+function hide(el) { el.classList.remove("show"); }
+
+// ---------------- 页面初始化 ----------------
+async function init() {
+  try {
+    const st = await api("GET", "/api/state");
+    state.groups = st.groups;
+    // 分组下拉（只列分组，不列全部，避免 70 对一起渲染）
+    const sel = $("groupSel");
+    sel.innerHTML = "";
+    st.groups.forEach((g, i) => {
+      const opt = document.createElement("option");
+      opt.value = i;
+      opt.textContent = g.label;
+      sel.appendChild(opt);
+    });
+    sel.selectedIndex = 0;
+    groupIndex = 0;
+    applyGroup();
+    // 设置弹窗填充
+    buildSettings(st);
+    // 记录哪些账户已配置密钥（决定加仓按钮是否可用）
+    state.configured = st.accounts.map(a => !!(a.api_key && a.api_secret));
+    $("status").textContent =
+      "就绪：已加载 " + st.all_pairs.length + " 个交易对（" + st.groups.length +
+      " 组可选），当前显示「" + st.groups[0].label + "」，点击「获取」拉取数据";
+  } catch (e) {
+    showInfo("加载失败", String(e));
   }
-  throw new Error("下单失败：重试后仍失败");
 }
 
-/* ============ 账户持仓模式（双向对冲/单向）缓存 ============ */
-const dualSideCache = {};   // apiKey -> bool（双向模式）
-async function getDualSide(apiKey, apiSecret){
-  if (apiKey in dualSideCache) return dualSideCache[apiKey];
-  const data = await signedGet(apiKey, apiSecret, "/fapi/v2/account");
-  dualSideCache[apiKey] = !!data.dualSidePosition;
-  return dualSideCache[apiKey];
-}
-async function positionSideFor(apiKey, apiSecret){
-  // 双向模式 -> "LONG"（本工具只做多单）；单向模式 -> "BOTH"
-  return (await getDualSide(apiKey, apiSecret)) ? "LONG" : "BOTH";
-}
-
-/* ============ 交易规则缓存（exchangeInfo） ============ */
-let exInfo = null;      // symbol -> {minNotional, stepSize, qPrec, pPrec}
-async function ensureExInfo(){
-  if (exInfo) return exInfo;
-  const r = await fetch(FAPI + "/fapi/v1/exchangeInfo");
-  const j = await r.json();
-  exInfo = {};
-  for (const s of (j.symbols || [])){
-    let minNotional = 0, step = 0;
-    for (const f of (s.filters || [])){
-      if (f.filterType === "MIN_NOTIONAL") minNotional = toFloat(f.notional);
-      else if (f.filterType === "LOT_SIZE") step = toFloat(f.stepSize);
-    }
-    exInfo[s.symbol] = {minNotional, step, qPrec: s.quantityPrecision ?? 4, pPrec: s.pricePrecision ?? 4};
-  }
-  return exInfo;
-}
-function rule(sym){ return exInfo && exInfo[sym] ? exInfo[sym] : {minNotional:0, step:0, qPrec:4, pPrec:4}; }
-
-/* ============ 持仓计算（与桌面版一致：只统计多单） ============ */
-function computePosition(symbol, posArr){
-  let totalNotional = 0, totalUnrealized = 0, totalMargin = 0;
-  for (const p of posArr){
-    const amt = toFloat(p.positionAmt);
-    if (amt <= 0) continue;                       // 忽略空单与 0
-    const mark = toFloat(p.markPrice);
-    totalNotional += amt * mark;
-    totalUnrealized += toFloat(p.unRealizedProfit);
-    totalMargin += positionMargin(p);
-  }
-  const roi = totalMargin > 0 ? totalUnrealized / totalMargin * 100 : 0;
-  return {symbol, notional: totalNotional, unrealized: totalUnrealized, roi, entry: 0, amt: totalNotional > 0 ? 1 : 0};
-}
-function positionMargin(p){
-  const m = toFloat(p.positionInitialMargin || p.isolatedMargin || p.initialMargin);
-  if (m > 0) return m;
-  const notional = Math.abs(toFloat(p.notional));
-  const lev = toFloat(p.leverage);
-  return lev > 0 && notional > 0 ? notional / lev : 0;
-}
-
-/* ============ 排序：账户仓位个数从多到少（USDT/USDC 分别计数） ============ */
-function groupPairs(pairs){
-  const baseMap = {}, baseOrder = [];
-  for (const sym of pairs){
-    let base, suffix;
-    if (sym.endsWith("USDT") || sym.endsWith("USDC")){ base = sym.slice(0, -4); suffix = sym.slice(-4); }
-    else { base = sym; suffix = "OTHER"; }
-    if (!baseMap[base]){ baseMap[base] = {}; baseOrder.push(base); }
-    baseMap[base][suffix] = sym;
-  }
-  return {baseMap, baseOrder};
-}
-function sortBaseOrder(baseOrder, baseMap, rowMaps){
-  function key(base){
-    const syms = ["USDT","USDC","OTHER"].filter(k => baseMap[base][k]);
-    let total = 0, count = 0;
-    for (const rm of rowMaps){
-      if (!rm) continue;
-      for (const s of syms){
-        const r = rm[s];
-        if (r && r.notional > 0){ total += r.notional; count += 1; }
-      }
-    }
-    return [-count, -total];
-  }
-  return [...baseOrder].sort((a, b) => {
-    const ka = key(a), kb = key(b);
-    return ka[0] - kb[0] || ka[1] - kb[1];
+function buildSettings(st) {
+  const tbody = $("settingsTable");
+  tbody.innerHTML = "";
+  st.accounts.forEach((a, i) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      "<td>" + a.name + "</td>" +
+      "<td><input type='text' placeholder='API Key' data-i='" + i +
+        "' data-f='key' value='" + esc(a.api_key) + "'></td>" +
+      "<td style='width:14px;'></td>" +
+      "<td><input type='password' placeholder='API Secret' data-i='" + i +
+        "' data-f='secret' value='" + esc(a.api_secret) + "'></td>";
+    tbody.appendChild(tr);
   });
+  $("proxyInput").value = st.proxy || "";
+  $("apiBaseInput").value = localStorage.getItem("apiBase") || "http://127.0.0.1:8765";
+}
+function esc(s) {
+  return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-/* ============ 界面状态 ============ */
-const state = {rowSymbols: {}, cooldownLeft: 0, addButtons: []};
-let posRowMaps = [];       // 每账户 symbol->row
-let posBaseOrder = [];     // 当前渲染的币种组顺序
-let posBaseMap = {};
-
-/* ============ 密钥存取 ============ */
-function buildAcctInputs(){
-  const grid = $("acctGrid");
-  grid.innerHTML = "";
-  const saved = JSON.parse(localStorage.getItem("bn_pos_keys") || "{}");
-  state.keyVars = [];
-  for (let i = 0; i < ACCOUNT_COUNT; i++){
-    const col = document.createElement("div");
-    col.className = "acct-col";
-    col.innerHTML =
-      '<div class="name">' + ACCOUNT_NAMES[i] + '</div>' +
-      '<label>API Key</label><input data-i="' + i + '" data-field="key" type="text" spellcheck="false">' +
-      '<label>API Secret</label><input data-i="' + i + '" data-field="secret" type="password">';
-    grid.appendChild(col);
-    state.keyVars.push({key: col.querySelector('[data-field="key"]'), secret: col.querySelector('[data-field="secret"]')});
-    state.keyVars[i].key.value = saved[i] ? (saved[i].key || "") : "";
-    state.keyVars[i].secret.value = saved[i] ? (saved[i].secret || "") : "";
+function applyGroup() {
+  const sel = $("groupSel");
+  groupIndex = parseInt(sel.value, 10) || 0;
+  const g = state.groups[groupIndex];
+  state.groupPairs = new Set(g ? g.pairs : []);
+  if (state.data) {
+    render();               // 已有数据，直接按新分组重绘，无需重新请求
+  } else {
+    $("summary").textContent = "当前分组：" + g.label + "（" + g.pairs.length + " 对）";
   }
 }
-function configuredAccounts(){
-  const out = [];
-  for (let i = 0; i < ACCOUNT_COUNT; i++){
-    const key = state.keyVars[i].key.value.trim();
-    const secret = state.keyVars[i].secret.value.trim();
-    if (key && secret) out.push({idx: i, key, secret});
-  }
-  return out;
-}
-$("btnSave").addEventListener("click", () => {
-  const data = {};
-  for (let i = 0; i < ACCOUNT_COUNT; i++){
-    data[i] = {key: state.keyVars[i].key.value.trim(), secret: state.keyVars[i].secret.value.trim()};
-  }
-  localStorage.setItem("bn_pos_keys", JSON.stringify(data));
-  setStatus("密钥已保存到本浏览器（localStorage）", "ok");
-});
-$("btnClear").addEventListener("click", () => {
-  localStorage.removeItem("bn_pos_keys");
-  buildAcctInputs();
-  setStatus("已清空本浏览器保存的密钥", "ok");
-});
 
-/* ============ 状态栏 ============ */
-function setStatus(msg, cls){
-  const el = $("status");
-  el.textContent = msg;
-  el.className = "status" + (cls ? " " + cls : "");
+// ---------------- 获取 ----------------
+async function onFetch() {
+  if (state.fetching) return;
+  state.fetching = true;
+  const btn = $("btnFetch");
+  btn.disabled = true;
+  btn.textContent = "获取中…";
+  $("status").textContent = "正在获取各账户仓位…";
+  try {
+    const data = await api("POST", "/api/fetch");
+    state.data = data;
+    render();
+  } catch (e) {
+    $("status").textContent = "获取失败：" + e.message;
+    showInfo("获取失败", String(e.message));
+  } finally {
+    state.fetching = false;
+    btn.disabled = false;
+    btn.textContent = "获取";
+  }
 }
 
-/* ============ 获取持仓 ============ */
-$("btnFetch").addEventListener("click", onFetch);
-async function onFetch(){
-  const accts = configuredAccounts();
-  if (!accts.length){ setStatus("请至少填写一个账户的 API Key 和 API Secret", "err"); return; }
-  $("btnFetch").disabled = true;
-  setStatus("正在获取 " + accts.length + " 个账户仓位…");
-  try{
-    await ensureExInfo();
-    const results = new Array(ACCOUNT_COUNT).fill(null);
-    await Promise.all(accts.map(async a => {
-      try{
-        const positions = await signedGet(a.key, a.secret, "/fapi/v2/positionRisk");
-        const posMap = {};
-        for (const p of positions) (posMap[p.symbol] = posMap[p.symbol] || []).push(p);
-        results[a.idx] = {ok: true, rows: RAW_PAIRS.map(sym => computePosition(sym, posMap[sym] || []))};
-      }catch(e){
-        results[a.idx] = {ok: false, error: e.message};
-      }
-    }));
-    renderResults(results);
-  }catch(e){
-    setStatus("获取失败：" + e.message, "err");
-  }
-  $("btnFetch").disabled = false;
-}
-
-/* ============ 渲染表格 ============ */
-function renderResults(results){
-  const {baseMap, baseOrder} = groupPairs(RAW_PAIRS);
-  posBaseMap = baseMap; posBaseOrder = baseOrder;
-  const rowMaps = results.map(r => (r && r.ok) ? Object.fromEntries(r.rows.map(x => [x.symbol, x])) : null);
-  posRowMaps = rowMaps;
-  const sorted = sortBaseOrder(baseOrder, baseMap, rowMaps);
-  posBaseOrder = sorted;
+// ---------------- 表格渲染 ----------------
+function render() {
+  const data = state.data;
+  if (!data) return;
+  $("emptyHint").style.display = "none";
 
   // 表头
-  const head = $("posHead");
-  let h = '<tr><th class="pair" rowspan="2">交易对名称</th>';
-  for (let i = 0; i < ACCOUNT_COUNT; i++){
-    h += '<th class="acct-head" colspan="3">' + ACCOUNT_NAMES[i] + '</th>';
-    h += '<th class="sep-head" rowspan="2"></th>';
-  }
-  h += '</tr><tr>';
-  for (let i = 0; i < ACCOUNT_COUNT; i++){
-    h += '<th>仓位</th><th>ROI</th><th>加仓</th>';
-  }
-  h += '</tr>';
+  const head = $("headRow");
+  head.innerHTML = "";
+  let h = th("交易对", "sym");
+  data.accounts.forEach(a => {
+    h += th("", "center", "sep");
+    h += "<th class='acct-head'>" + esc(a.name) + tagOf(a) + "</th>";
+    h += th(a.name + "仓位", "num");
+    h += th(a.name + "ROI", "num");
+    h += th("", "center");
+  });
   head.innerHTML = h;
 
-  // 数据行
-  const body = $("posBody");
-  body.innerHTML = "";
-  state.addButtons = [];
-  state.rowSymbols = {};
-  for (let g = 0; g < sorted.length; g++){
-    const base = sorted[g];
-    const syms = ["USDT","USDC","OTHER"].filter(k => baseMap[base][k]).map(k => baseMap[base][k]);
-    for (const sym of syms){
-      const tr = document.createElement("tr");
-      tr.className = (g % 2 === 0) ? "row1" : "row2";
-      let cells = '<td class="pair">' + sym + '</td>';
-      for (let i = 0; i < ACCOUNT_COUNT; i++){
-        const rm = rowMaps[i];
-        if (!rm){
-          cells += '<td class="muted">' + (results[i] === null ? "" : "失败") + '</td><td class="muted"></td>';
-        }else{
-          const r = rm[sym];
-          if (r && r.notional > 0){
-            const roiCls = r.roi >= 0 ? "roi-up" : "roi-down";
-            cells += '<td class="pos">' + fmt(r.notional) + '</td><td class="' + roiCls + '">' +
-                     (r.roi >= 0 ? "+" : "") + r.roi.toFixed(2) + '%</td>';
-          }else{
-            cells += '<td class="muted"></td><td class="muted"></td>';
-          }
+  // 表体：只渲染当前分组内的交易对，不同币种之间用空行隔开（与桌面版一致）
+  const tbody = $("gridBody");
+  tbody.innerHTML = "";
+  const shown = data.order.filter(s => state.groupPairs.has(s));
+  const totalCols = 1 + data.accounts.length * 4;  // 交易对 + 每账户(分隔+仓位+ROI+加仓)
+  let lastBase = null, groupNo = 0;
+  shown.forEach((sym) => {
+    const base = (sym.endsWith("USDT") || sym.endsWith("USDC")) ? sym.slice(0, -4) : sym;
+    if (lastBase !== null && base !== lastBase) {
+      const gap = document.createElement("tr");
+      gap.className = "coin-gap";
+      gap.innerHTML = "<td colspan='" + totalCols + "'></td>";
+      tbody.appendChild(gap);
+      groupNo++;
+    }
+    lastBase = base;
+    // 同一币种的 USDT/USDC 两行使用同一底色；不同币种之间交替（配合空行分隔）
+    const tr = document.createElement("tr");
+    tr.className = (groupNo % 2 === 0) ? "stripe-0" : "stripe-1";
+    let html = "<td class='sym'>" + esc(sym) + "</td>";
+    data.accounts.forEach(a => {
+      html += "<td class='sep'></td>";
+      if (a.status === "ok") {
+        const r = a.rows[sym];
+        if (r && r.notional > 0) {
+          html += "<td class='num mono'>" + fmtMoney(r.notional) + "</td>";
+          html += "<td class='num mono " + roiClass(r.roi) + "'>" + fmtRoi(r.roi) + "</td>";
+        } else {
+          html += "<td class='num'></td><td class='num'></td>";
         }
-        cells += '<td><button class="add-btn" data-sym="' + sym + '" data-acct="' + i + '" title="将给 ' +
-                 ACCOUNT_NAMES[i] + ' 加仓 ' + sym + '（市价单，仓位翻倍）">加仓' + (i + 1) + '</button></td>';
-        cells += '<td class="sep"></td>';
+        const cfg = state.configured[a.idx];
+        html += "<td class='center'>" +
+          (cfg
+            ? "<button class='btn-add' data-sym='" + esc(sym) + "' data-i='" + a.idx + "'>加仓" + (a.idx + 1) + "</button>"
+            : "") +
+          "</td>";
+      } else if (a.status === "error") {
+        html += "<td class='num' style='color:#f53f3f'>失败</td><td class='num'></td><td class='center'></td>";
+      } else {
+        html += "<td class='num'></td><td class='num'></td><td class='center'></td>";
       }
-      tr.innerHTML = cells;
-      body.appendChild(tr);
-      const symRow = sym;
-      for (let i = 0; i < ACCOUNT_COUNT; i++){
-        state.addButtons.push({el: tr.querySelector('[data-acct="' + i + '"]'), sym: symRow, acct: i});
-      }
-    }
-    if (g < sorted.length - 1){
-      const blank = document.createElement("tr");
-      const cols = 1 + ACCOUNT_COUNT * 4;
-      let b = '<td class="blank"></td>';
-      for (let i = 0; i < ACCOUNT_COUNT; i++){
-        b += '<td class="blank"></td><td class="blank"></td><td class="blank"></td><td class="sep"></td>';
-      }
-      blank.innerHTML = b;
-      body.appendChild(blank);
-    }
-  }
-  // 悬停提示（title 已带；状态栏联动）
-  for (const item of state.addButtons){
-    item.el.addEventListener("click", () => onAddClick(item.sym, item.acct));
-    item.el.addEventListener("mouseenter", () => setStatus("将给 " + ACCOUNT_NAMES[item.acct] + " 加仓 " + item.sym + "（市价单，仓位翻倍）"));
-    item.el.addEventListener("mouseleave", () => setStatus(""));
-  }
+    });
+    tr.innerHTML = html;
+    tbody.appendChild(tr);
+  });
+  bindAddButtons();
 
-  // 状态汇总
-  const parts = [];
-  let cleaned = 0;
-  for (let i = 0; i < ACCOUNT_COUNT; i++){
-    const r = results[i];
-    if (r === null) parts.push(ACCOUNT_NAMES[i] + " 未配置");
-    else if (!r.ok) parts.push(ACCOUNT_NAMES[i] + " 失败:" + r.error.slice(0, 40));
-    else{
-      const n = r.rows.filter(x => x.notional > 0).length;
-      const tot = r.rows.reduce((s, x) => s + x.notional, 0);
-      parts.push(ACCOUNT_NAMES[i] + ":" + n + "仓 " + fmt(tot) + "U");
-    }
-  }
-  setStatus("获取成功：" + parts.join(" | "), "ok");
-  startCooldown();
-}
-
-/* ============ 加仓 ============ */
-function onAddClick(sym, acct){
-  if (state.cooldownLeft > 0){ setStatus("操作冷却中，剩余 " + state.cooldownLeft + " 秒", "err"); return; }
-  const acctCfg = configuredAccounts().find(a => a.idx === acct);
-  if (!acctCfg){ setStatus(ACCOUNT_NAMES[acct] + " 未配置密钥", "err"); return; }
-  const rm = posRowMaps[acct];
-  const r = rm && rm[sym];
-  const hasPos = !!(r && r.notional > 0);
-  showModal(sym, acct, hasPos, async () => {
-    try{
-      await doAdd(acctCfg, sym, acct, r);
-      setStatus(ACCOUNT_NAMES[acct] + " 下单成功：" + sym, "ok");
-      startCooldown();
-      setTimeout(onFetch, 1500);
-    }catch(e){
-      setStatus("下单失败：" + e.message, "err");
+  // 底部汇总
+  let parts = [];
+  data.accounts.forEach(a => {
+    if (a.status === "ok") {
+      let n = 0, total = 0;
+      for (const sym of state.groupPairs) {
+        const r = a.rows[sym];
+        if (r && r.notional > 0) { n++; total += r.notional; }
+      }
+      parts.push(a.name + ":" + n + "仓 " + (total > 0 ? fmtMoney(total) : "0.00") + "U");
+    } else if (a.status === "error") {
+      parts.push(a.name + " 失败");
     }
   });
+  let status = "获取成功（" + $("groupSel").selectedOptions[0].textContent + "）：" + parts.join(" | ");
+  $("status").textContent = status;
+  $("summary").textContent = "已加载 " + shown.length + " 个交易对";
+  $("cleaned").textContent = data.cleaned_total ? "撤销失效止损单 " + data.cleaned_total + " 个" : "";
 }
-function showModal(sym, acct, hasPos, onConfirm){
-  const box = $("modalBox");
-  const name = ACCOUNT_NAMES[acct];
-  const verb = hasPos ? "等量加仓（市价单，仓位翻倍）" : "开仓（市价单，最少开仓金额+1 USDT）";
-  box.innerHTML =
-    '<h3>' + name + ' · ' + sym + '</h3>' +
-    '<div class="row"><span>操作</span><span>' + verb + '</span></div>' +
-    '<div class="row"><span>账户</span><span>' + name + '</span></div>' +
-    '<div class="row"><span>交易对</span><span>' + sym + '</span></div>' +
-    '<div class="warn">市价单将立即按当前市场价格成交，请仔细核对账户与交易对。</div>' +
-    '<div class="btns"><button class="btn-ghost" id="mCancel">取消</button>' +
-    '<button class="btn-primary" id="mOk">确认下单</button></div>';
-  $("modalMask").classList.add("show");
-  $("mCancel").addEventListener("click", () => $("modalMask").classList.remove("show"));
-  $("mOk").addEventListener("click", () => { $("modalMask").classList.remove("show"); onConfirm(); });
+function th(text, cls, extra) {
+  if (extra === "sep") return "<th class='sep' style='padding:0;width:2px;'></th>";
+  return "<th class='" + (cls || "") + "'>" + esc(text) + "</th>";
 }
-async function doAdd(acctCfg, sym, acct, row){
-  const ruleInfo = rule(sym);
-  // 重新拉取该账户该币种真实持仓，确保数量准确
-  const positions = await signedGet(acctCfg.key, acctCfg.secret, "/fapi/v2/positionRisk", {symbol: sym});
-  let amt = 0, mark = 0, entry = 0, unrealized = 0;
-  for (const p of positions){
-    const a = toFloat(p.positionAmt);
-    if (a > 0){
-      amt = a; mark = toFloat(p.markPrice); entry = toFloat(p.entryPrice);
-      unrealized = toFloat(p.unRealizedProfit);
-    }
-  }
-  const minN = ruleInfo.minNotional;
-  let qty;
-  if (amt > 0){
-    qty = amt;
-    if (minN > 0 && amt * mark < minN){
-      qty = (minN + 1) / (mark > 0 ? mark : 1);
-      if (ruleInfo.step > 0) qty = Math.ceil(qty / ruleInfo.step) * ruleInfo.step;
-    }
-  }else{
-    // 无多单：开仓（最少开仓金额+1 USDT）
-    if (minN <= 0 || mark <= 0) throw new Error("无法获取 " + sym + " 的最少开仓金额或标记价格");
-    qty = (minN + 1) / mark;
-    if (ruleInfo.step > 0) qty = Math.ceil(qty / ruleInfo.step) * ruleInfo.step;
-  }
-  qty = Math.round(qty * Math.pow(10, ruleInfo.qPrec)) / Math.pow(10, ruleInfo.qPrec);
-  if (qty <= 0) throw new Error("计算下单数量为 0，无法下单");
-  const posSide = await positionSideFor(acctCfg.key, acctCfg.secret);
-  const params = {
-    symbol: sym, side: "BUY", type: "MARKET",
-    quantity: qty.toFixed(ruleInfo.qPrec),
-    positionSide: posSide,
-    newOrderRespType: "FULL",
-  };
-  const result = await signedPost(acctCfg.key, acctCfg.secret, "/fapi/v1/order", params);
-  const orderId = result.orderId ?? "—";
-  // 加仓后自动设置止损：浮盈回撤 50%（有浮盈才设置）
-  let stopMsg = "";
-  if (amt > 0 && unrealized > 0){
-    const totalAmt = amt + qty;
-    const avg = (entry * amt + mark * qty) / totalAmt;
-    const half = unrealized / 2;
-    const trigger = avg + half / totalAmt;
-    const pPrec = ruleInfo.pPrec;
-    const stopPrice = Math.round(trigger * Math.pow(10, pPrec)) / Math.pow(10, pPrec);
-    try{
-      await placeStopLoss(acctCfg, sym, "BUY", stopPrice.toFixed(pPrec));
-      stopMsg = "\n已设置仓位止损：浮盈回落到一半（" + (unrealized / 2).toFixed(2) + " USDT）时触发平仓 @ " + stopPrice.toFixed(pPrec);
-    }catch(e){
-      stopMsg = "\n止损设置失败（不影响本次下单）：" + e.message;
-    }
-  }
-  alert("下单成功：" + sym + "\n订单号: " + orderId + "\n状态: " + (result.status || "NEW") + stopMsg);
+function tagOf(a) {
+  if (a.status === "ok") return "<span class='tag ok'>OK</span>";
+  if (a.status === "error") return "<span class='tag err'>失败</span>";
+  return "<span class='tag na'>未配置</span>";
 }
-async function placeStopLoss(acctCfg, sym, side, stopPriceStr){
-  // 仓位级全仓平仓止损单（Algo Order API）
-  const clientAlgoId = "SL" + Array.from(crypto.getRandomValues(new Uint8Array(15)),
-    b => b.toString(16).padStart(2, "0")).join("").toUpperCase();
-  const posSide = await positionSideFor(acctCfg.key, acctCfg.secret);
-  const params = {
-    algoType: "CONDITIONAL",
-    symbol: sym,
-    side: side,
-    type: "STOP_MARKET",
-    triggerPrice: stopPriceStr,
-    closePosition: "true",
-    positionSide: posSide,
-    clientAlgoId: clientAlgoId.slice(0, 32),
-  };
-  const r = await signedPost(acctCfg.key, acctCfg.secret, "/fapi/v1/algoOrder", params);
-  if (r && r.code !== undefined && r.code !== null && r.code !== 200){
-    throw new Error("止损单失败（code " + r.code + "）：" + (r.msg || ""));
-  }
-  return r;
+function bindAddButtons() {
+  document.querySelectorAll("#gridBody .btn-add").forEach(btn => {
+    btn.onclick = () => onPlan(btn.dataset.sym, parseInt(btn.dataset.i, 10));
+  });
 }
 
-/* ============ 冷却 ============ */
-let cooldownTimer = null;
-function startCooldown(){
-  state.cooldownLeft = 30;
-  clearInterval(cooldownTimer);
-  cooldownTimer = setInterval(() => {
-    state.cooldownLeft -= 1;
-    for (const item of state.addButtons) item.el.disabled = state.cooldownLeft > 0;
-    if (state.cooldownLeft <= 0){ clearInterval(cooldownTimer); }
-  }, 1000);
-}
-
-/* ============ 测试连接 ============ */
-$("btnTest").addEventListener("click", async () => {
-  $("btnTest").disabled = true;
-  setStatus("正在测试连接…");
-  try{
-    await syncServerTime();
-    const ping = await fetch(FAPI + "/fapi/v1/ping");
-    let msg = "连接正常：币安公共接口返回 HTTP " + ping.status;
-    const accts = configuredAccounts();
-    if (accts.length){
-      let okN = 0;
-      for (const a of accts){
-        try{
-          await signedGet(a.key, a.secret, "/fapi/v2/positionRisk");
-          okN++;
-        }catch(e){
-          msg += "\n" + ACCOUNT_NAMES[a.idx] + " 签名失败：" + e.message;
-        }
+// ---------------- 加仓计划与执行 ----------------
+async function onPlan(symbol, acctIdx) {
+  $("status").textContent = "正在查询 " + symbol + " 最新持仓与加仓条件…";
+  try {
+    const res = await api("POST", "/api/plan", {symbol, acct_idx: acctIdx});
+    const p = res.plan;
+    if (p.action === "error") {
+      showInfo("提示", p.message);
+      $("status").textContent = p.message;
+      return;
+    }
+    if (p.action === "none") {
+      const msg =
+        p.acct_name + " · " + p.symbol + " 当前投资回报率 " + fmtRoi(p.roi) + "\n" +
+        "规则：无多单→开多；ROI≤" + p.roi_lo + "%→等量加仓；ROI>" + p.roi_hi + "%→等量加仓并设浮盈50%止损。\n" +
+        "当前 ROI 在 " + p.roi_lo + "%~" + p.roi_hi + "% 之间，不执行任何操作。";
+      showInfo("不满足加仓条件", msg);
+      $("status").textContent = p.acct_name + " · " + p.symbol + "：ROI " + fmtRoi(p.roi) + "，不满足加仓条件";
+      return;
+    }
+    // open / add / add_sl：弹确认框
+    let body, title;
+    if (p.action === "open") {
+      title = "开仓确认";
+      body =
+        "账户：" + p.acct_name + "\n" +
+        "将以【市价单】买入开仓 " + p.qty + " " + p.symbol + "\n" +
+        "开仓金额约 " + fmtMoney(p.qty * p.mark) + " USDT（系统最少开仓 " +
+        fmtMoney(p.min_notional) + " USDT + 1）\n" +
+        (p.has_short ? "（注：该交易对存在空单，工具已忽略空单，本次为开多单）\n" : "") +
+        "\n确认执行？";
+    } else {
+      title = "加仓确认";
+      body =
+        "账户：" + p.acct_name + "\n" +
+        "将以【市价单】" + p.verb + " " + p.qty + " " + p.symbol + "\n" +
+        p.detail + "\n";
+      if (p.action === "add_sl") {
+        body += "加仓后自动设置「仓位止盈止损」：止损触发时剩余浮盈 = 加仓后当前浮盈的 50%" +
+          "（触发价约 " + p.stop_price + "，成交后按实际仓位重算）\n";
       }
-      msg += "；已填账户签名检查 " + okN + "/" + accts.length + " 通过";
-    } else msg += "；未填账户密钥，跳过签名检查";
-    setStatus(msg, "ok");
-  }catch(e){
-    setStatus("测试失败：" + e.message, "err");
+      body += "\n确认执行？";
+    }
+    $("planTitle").textContent = title;
+    $("planBody").textContent = body;
+    window.__plan = p;
+    $("planMask").classList.add("show");
+  } catch (e) {
+    $("status").textContent = "查询失败：" + e.message;
+    showInfo("查询失败", String(e.message));
   }
-  $("btnTest").disabled = false;
-});
+}
 
-/* ============ 初始化 ============ */
-buildAcctInputs();
+async function onPlanOk() {
+  const p = window.__plan;
+  if (!p) return;
+  hide($("planMask"));
+  $("status").textContent = "正在执行：" + p.acct_name + " · " + p.symbol + " …";
+  try {
+    const res = await api("POST", "/api/execute", {plan: p});
+    $("status").textContent = "交易已执行";
+    showInfo("执行成功", res.message);
+    setTimeout(onFetch, 1200);   // 自动刷新表格
+  } catch (e) {
+    $("status").textContent = "执行失败：" + e.message;
+    showInfo("执行失败", String(e.message));
+  }
+}
+
+// ---------------- 设置 ----------------
+async function onSaveSettings() {
+  const accounts = [];
+  document.querySelectorAll("#settingsTable tr").forEach(tr => {
+    const idx = parseInt(tr.querySelector("input[data-f=key]").dataset.i, 10);
+    accounts[idx] = {
+      api_key: tr.querySelector("input[data-f=key]").value,
+      api_secret: tr.querySelector("input[data-f=secret]").value,
+    };
+  });
+  try {
+    const res = await api("POST", "/api/config",
+      {accounts, proxy: $("proxyInput").value});
+    const savedBase = ($("apiBaseInput").value || "").trim().replace(/\/+$/, "") ||
+      "http://127.0.0.1:8765";
+    localStorage.setItem("apiBase", savedBase);
+    apiBase = savedBase;
+    $("status").textContent = res.message;
+    const st = await api("GET", "/api/state");
+    state.configured = st.accounts.map(a => !!(a.api_key && a.api_secret));
+    if (state.data) render();
+    showInfo("保存成功", res.message);
+  } catch (e) {
+    showInfo("保存失败", String(e.message));
+  }
+}
+
+async function onTest() {
+  $("btnTest").disabled = true;
+  $("btnTest").textContent = "测试中…";
+  try {
+    const res = await api("POST", "/api/test");
+    showInfo("连接测试：" + res.summary, res.lines.join("\n"));
+  } catch (e) {
+    showInfo("连接测试失败", String(e.message));
+  } finally {
+    $("btnTest").disabled = false;
+    $("btnTest").textContent = "测试连接";
+  }
+}
+
+// ---------------- 事件绑定 ----------------
+$("btnFetch").onclick = onFetch;
+$("groupSel").onchange = applyGroup;
+$("btnSettings").onclick = async () => {
+  try {
+    const st = await api("GET", "/api/state");
+    buildSettings(st);
+    state.configured = st.accounts.map(a => !!(a.api_key && a.api_secret));
+  } catch (e) { /* 用旧数据 */ }
+  $("settingsMask").classList.add("show");
+};
+$("btnCloseSettings").onclick = () => hide($("settingsMask"));
+$("btnSave").onclick = onSaveSettings;
+$("btnTest").onclick = onTest;
+$("btnPlanCancel").onclick = () => { hide($("planMask")); $("status").textContent = "已取消"; };
+$("btnPlanOk").onclick = onPlanOk;
+$("btnInfoOk").onclick = () => hide($("infoMask"));
+
+init();
 </script>
 </body>
 </html>
