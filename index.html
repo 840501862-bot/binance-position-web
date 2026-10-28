@@ -227,8 +227,12 @@ function loadKeys() {
 function saveKeys(keys) { localStorage.setItem(KEY_STORE, JSON.stringify(keys)); }
 function keysFor(i) {
   const k = loadKeys()[i] || {};
-  return {key: (k.key || "").trim(), secret: (k.secret || "").trim()};
+  return {key: (k.key || "").trim(), secret: (k.secret || "").trim(), is5x: !!k.is5x};
 }
+
+/* 5倍杠杆账户 ROI 等比缩放：实际 7.5% = 正常 100% */
+const LEV5_SCALE = 100/7.5;
+function scaleRoi(is5x, roi){ return is5x ? roi*LEV5_SCALE : roi; }
 
 // 本地止损单跟踪：{account, symbol, positionSide, clientAlgoId, triggerPrice, created}
 function loadTracking() {
@@ -591,7 +595,7 @@ async function onFetch() {
     const results = new Array(ACCOUNT_COUNT);
     const jobs = [];
     for (let i = 0; i < ACCOUNT_COUNT; i++) {
-      const {key, secret} = keysFor(i);
+      const {key, secret, is5x} = keysFor(i);
       if (!key || !secret) { results[i] = null; continue; }
       jobs.push((async () => {
         try {
@@ -599,7 +603,11 @@ async function onFetch() {
           const posMap = {};
           positions.forEach(p => { (posMap[p.symbol] = posMap[p.symbol] || []).push(p); });
           const rows = {};
-          ALL_PAIRS.forEach(sym => { rows[sym] = computePosition(sym, posMap[sym] || []); });
+          ALL_PAIRS.forEach(sym => {
+            const r = computePosition(sym, posMap[sym] || []);
+            r.roi = scaleRoi(is5x, r.roi);
+            rows[sym] = r;
+          });
           const openSides = {};
           positions.forEach(p => {
             if (toFloat(p.positionAmt) > 0) {
@@ -671,8 +679,8 @@ async function onFetch() {
 
 // ==================== 计划与执行 ====================
 async function buildPlan(symbol, acctIdx, key, secret) {
-  const roiLo = acctIdx === 0 ? -100.0 : -7.5;
-  const roiHi = acctIdx === 0 ? 100.0 : 7.5;
+  const {is5x} = keysFor(acctIdx);
+  const roiLo = -100.0, roiHi = 100.0;
   const allRows = await fetchPositions(key, secret, symbol);
   const rows = allRows.filter(p => toFloat(p.positionAmt) > 0);
   const hasShort = allRows.some(p => toFloat(p.positionAmt) < 0);
@@ -685,7 +693,8 @@ async function buildPlan(symbol, acctIdx, key, secret) {
     return Object.assign(plan, {action: "open", qty, minNotional, mark, hasShort});
   }
   const pos = rows[0];
-  const roi = positionRoi(pos);
+  const rawRoi = positionRoi(pos);
+  const roi = scaleRoi(is5x, rawRoi);
   const {qty, minNotional, notional} = await calcAddQty(pos);
   let detail = "（数量与当前持仓相同，仓位翻倍）";
   if (minNotional > 0 && notional < minNotional) {
@@ -813,7 +822,10 @@ function render() {
   let h = th("交易对", "sym");
   data.accounts.forEach(a => {
     h += th("", "center", "sep");
-    h += "<th class='acct-head'>" + esc(a.name) + tagOf(a) + "</th>";
+    const cfg = state.configured[a.idx];
+    const k = loadKeys()[a.idx] || {};
+    const fiveTag = k.is5x ? " <span class='tag' style='background:rgba(124,58,237,.2);color:#a78bfa;'>5x</span>" : "";
+    h += "<th class='acct-head'>" + esc(a.name) + fiveTag + tagOf(a) + "</th>";
     h += th(a.name + "仓位", "num");
     h += th(a.name + "ROI", "num");
     h += th("", "center");
@@ -916,7 +928,9 @@ function buildSettings() {
         "' data-f='key' value='" + esc(k.key) + "'></td>" +
       "<td style='width:14px;'></td>" +
       "<td><input type='password' placeholder='API Secret' data-i='" + i +
-        "' data-f='secret' value='" + esc(k.secret) + "'></td>";
+        "' data-f='secret' value='" + esc(k.secret) + "'></td>" +
+      "<td style='width:40px;text-align:center;'><label title='勾选后ROI按7.5%=100%等比缩放'><input type='checkbox' data-i='" + i +
+        "' data-f='is5x' " + (k.is5x ? "checked" : "") + " style='cursor:pointer'> 5x</label></td>";
     tbody.appendChild(tr);
   }
   const n = loadKeys();
@@ -933,6 +947,7 @@ function onSaveSettings() {
     keys[idx] = {
       key: tr.querySelector("input[data-f=key]").value.trim(),
       secret: tr.querySelector("input[data-f=secret]").value.trim(),
+      is5x: tr.querySelector("input[data-f=is5x]").checked,
     };
   });
   saveKeys(keys);
