@@ -678,9 +678,9 @@ async function onFetch() {
 }
 
 // ==================== 计划与执行 ====================
+// 规则：无仓→开仓(min+1)；有仓 ROI>100%→全平平仓；有仓 ROI<-100%→等量加仓(不足min+1)；中间不动
 async function buildPlan(symbol, acctIdx, key, secret) {
   const {is5x} = keysFor(acctIdx);
-  const roiLo = -100.0, roiHi = 100.0;
   const allRows = await fetchPositions(key, secret, symbol);
   const rows = allRows.filter(p => toFloat(p.positionAmt) > 0);
   const hasShort = allRows.some(p => toFloat(p.positionAmt) < 0);
@@ -695,19 +695,46 @@ async function buildPlan(symbol, acctIdx, key, secret) {
   const pos = rows[0];
   const rawRoi = positionRoi(pos);
   const roi = scaleRoi(is5x, rawRoi);
-  const {qty, minNotional, notional} = await calcAddQty(pos);
-  let detail = "（数量与当前持仓相同，仓位翻倍）";
-  if (minNotional > 0 && notional < minNotional) {
-    detail = "（当前仓位金额 " + notional.toFixed(2) + " USDT 低于最少开仓 " + minNotional.toFixed(2) +
-      " USDT，按 " + (minNotional + 1).toFixed(2) + " USDT 折算数量）";
+  const posAmt = Math.abs(toFloat(pos.positionAmt));
+  const mark = toFloat(pos.markPrice);
+
+  // ROI > 100% → 全平平仓止盈
+  if (roi > 100) {
+    return Object.assign(plan, {action: "close", roi, pos, qty: posAmt, hasShort});
   }
-  const p = Object.assign(plan, {action: "none", roi, roiLo, roiHi, verb: "买入加多", qty, detail, pos, hasShort});
-  if (roi <= roiLo) p.action = "add";
-  else if (roi > roiHi) {
-    p.action = "add_sl";
-    p.stopPrice = calcAddSlEstimate(pos, toFloat(pos.markPrice), qty);
+  // ROI < -100% → 等量加仓
+  if (roi < -100) {
+    const {qty, minNotional, notional} = await calcAddQty(pos);
+    let detail = "（数量与当前持仓相同，仓位翻倍）";
+    if (minNotional > 0 && notional < minNotional) {
+      detail = "（当前仓位 " + notional.toFixed(2) + " USDT 低于最少开仓 " + minNotional.toFixed(2) +
+        " USDT，按 " + (minNotional + 1).toFixed(2) + " USDT 折算数量）";
+    }
+    return Object.assign(plan, {action: "add", roi, qty, detail, pos, hasShort});
   }
-  return p;
+  // 中间区间不操作
+  return Object.assign(plan, {action: "none", roi, pos, hasShort});
+}
+
+async function closePosition(key, secret, pos) {
+  const symbol = pos.symbol;
+  const amt = Math.abs(toFloat(pos.positionAmt));
+  const prec = await qtyPrec(symbol);
+  const posSide = pos.positionSide || "LONG";
+  const candidates = posSide === "BOTH" ? ["BOTH", "LONG"] : [posSide, "BOTH"];
+  let lastErr = null;
+  for (const positionSide of candidates) {
+    try {
+      return await bfSigned("POST", "/fapi/v1/order", {
+        symbol, side: "SELL", type: "MARKET",
+        quantity: qtyStr(amt, prec), positionSide, reduceOnly: "true",
+      }, key, secret);
+    } catch (e) {
+      if (e.message.indexOf("4061") >= 0 || /position side/i.test(e.message)) { lastErr = e; continue; }
+      throw e;
+    }
+  }
+  throw lastErr;
 }
 
 async function executePlan(p, key, secret) {
@@ -717,40 +744,35 @@ async function executePlan(p, key, secret) {
     return acct + " 开仓成功：" + symbol + " " + trimNum(p.qty) + "（约 " + (p.qty * p.mark).toFixed(2) +
       " USDT）\n订单号 " + (result.orderId || "?");
   }
+  if (p.action === "close") {
+    // 平仓前先撤销该交易对所有止损单
+    try {
+      const openAlgo = await listOpenAlgoForClose(key, secret, symbol);
+      for (const o of openAlgo) { try { await cancelAlgoOrder(key, secret, o.clientAlgoId || o.algoId); } catch (e) {} }
+    } catch (e) {}
+    const orders = loadTracking();
+    const kept = orders.filter(o => !(o.account === acct && o.symbol === symbol));
+    saveTracking(kept);
+    const result = await closePosition(key, secret, p.pos);
+    return acct + " 平仓成功（止盈）：" + symbol + " 全平 " + trimNum(p.qty) +
+      "\nROI " + fmtRoi(p.roi) + "\n订单号 " + (result.orderId || "?");
+  }
+  // add：等量加仓
   const result = await addPosition(key, secret, p.pos, p.qty);
   const orderId = result.orderId || "?";
-  if (p.action === "add") {
-    return acct + " 加仓成功：" + symbol + " " + trimNum(p.qty) + "（" + p.verb + "，仓位翻倍）\n订单号 " + orderId;
-  }
-  // add_sl：先撤旧止损再挂新止损
-  const fresh = (await fetchPositions(key, secret, symbol)).filter(x => toFloat(x.positionAmt) > 0);
-  if (!fresh.length) throw new Error("加仓成功，但未查询到该账户的多单持仓，无法设置止损单（请手动检查仓位）");
-  const freshPos = fresh[0];
-  const freshSide = freshPos.positionSide || (toFloat(freshPos.positionAmt) > 0 ? "LONG" : "SHORT");
-  // 撤销该账户该交易对该方向的旧止损单
-  const orders = loadTracking();
-  const kept = [];
-  for (const o of orders) {
-    if (o.account === acct && o.symbol === symbol && (o.positionSide || "BOTH") === freshSide) {
-      try { await cancelAlgoOrder(key, secret, o.clientAlgoId); } catch (e) { kept.push(o); }
-      continue;
-    }
-    kept.push(o);
-  }
-  saveTracking(kept);
-  await new Promise(r => setTimeout(r, 300)); // 等撤销生效
-  const {stopPrice, clientAlgoId} = await placeStopLoss(key, secret, freshPos);
-  const tracking = loadTracking();
-  tracking.push({account: acct, symbol, positionSide: freshSide, clientAlgoId,
-    triggerPrice: stopPrice, created: new Date().toLocaleString("zh-CN", {hour12: false})});
-  saveTracking(tracking);
-  return acct + " 加仓成功：" + symbol + " " + trimNum(p.qty) + "（仓位翻倍）\n订单号 " + orderId +
-    "\n\n止损单已设置：触发时剩余浮盈 = 加仓后当前浮盈的 50%（全仓平仓），触发价 " + stopPrice;
+  return acct + " 加仓成功（补仓）：" + symbol + " " + trimNum(p.qty) +
+    "（等量加仓，仓位翻倍）\n当前 ROI " + fmtRoi(p.roi) + "\n订单号 " + orderId;
+}
+async function listOpenAlgoForClose(key, secret, symbol) {
+  try {
+    const d = await bfSigned("GET", "/fapi/v1/algoOrder", {symbol}, key, secret);
+    return Array.isArray(d) ? d : [];
+  } catch (e) { return []; }
 }
 function trimNum(v) { return String(v).replace(/(\.\d*?[1-9])0+$/, "$1").replace(/\.0+$/, ""); }
 
 async function onPlan(symbol, acctIdx) {
-  $("status").textContent = "正在查询 " + symbol + " 最新持仓与加仓条件…";
+  $("status").textContent = "正在查询 " + symbol + " 最新持仓…";
   const {key, secret} = keysFor(acctIdx);
   if (!key || !secret) { showInfo("提示", ACCOUNT_NAMES[acctIdx] + " 未填写密钥"); return; }
   try {
@@ -762,25 +784,27 @@ async function onPlan(symbol, acctIdx) {
     }
     if (p.action === "none") {
       const msg = p.acctName + " · " + p.symbol + " 当前投资回报率 " + fmtRoi(p.roi) + "\n" +
-        "规则：无多单→开多；ROI≤" + p.roiLo + "%→等量加仓；ROI>" + p.roiHi + "%→等量加仓并设浮盈50%止损。\n" +
-        "当前 ROI 在 " + p.roiLo + "%~" + p.roiHi + "% 之间，不执行任何操作。";
-      showInfo("不满足加仓条件", msg);
-      $("status").textContent = p.acctName + " · " + p.symbol + "：ROI " + fmtRoi(p.roi) + "，不满足加仓条件";
+        "规则：无仓→开仓(min+1)；ROI>100%→平仓止盈；ROI<-100%→等量加仓。\n" +
+        "当前 ROI 在 -100%~100% 之间，不执行任何操作。";
+      showInfo("不操作", msg);
+      $("status").textContent = p.acctName + " · " + p.symbol + "：ROI " + fmtRoi(p.roi) + "，区间内不操作";
       return;
     }
     let body, title;
     if (p.action === "open") {
       title = "开仓确认";
-      body = "账户：" + p.acctName + "\n将以【市价单】买入开仓 " + trimNum(p.qty) + " " + p.symbol + "\n" +
-        "开仓金额约 " + fmtMoney(p.qty * p.mark) + " USDT（系统最少开仓 " + fmtMoney(p.minNotional) +
-        " USDT + 1）\n" + (p.hasShort ? "（注：该交易对存在空单，工具已忽略空单，本次为开多单）\n" : "") + "\n确认执行？";
+      body = "账户：" + p.acctName + "\n无持仓，将以【市价单】买入开仓 " + trimNum(p.qty) + " " + p.symbol + "\n" +
+        "开仓金额约 " + fmtMoney(p.qty * p.mark) + " USDT（最少开仓 " + fmtMoney(p.minNotional) +
+        " USDT + 1）\n" + (p.hasShort ? "（注：该交易对存在空单，工具已忽略空单）\n" : "") + "\n确认执行？";
+    } else if (p.action === "close") {
+      title = "平仓止盈确认";
+      body = "账户：" + p.acctName + "\n当前 ROI " + fmtRoi(p.roi) + " > 100%\n" +
+        "将以【市价单】全平多单 " + trimNum(p.qty) + " " + p.symbol + "\n" +
+        "（同时撤销该交易对所有止损单）\n\n确认平仓？";
     } else {
-      title = "加仓确认";
-      body = "账户：" + p.acctName + "\n将以【市价单】买入加仓 " + trimNum(p.qty) + " " + p.symbol + " " + p.detail + "\n" +
-        "当前投资回报率 " + fmtRoi(p.roi) + "（" + p.roiLo + "% ~ " + p.roiHi + "% 阈值）\n" +
-        (p.action === "add_sl"
-          ? "加仓后将设置【浮盈50%】仓位级止损（全仓平仓），预估触发价 " + fmtPrice(p.stopPrice) + "\n"
-          : "") +
+      title = "加仓补仓确认";
+      body = "账户：" + p.acctName + "\n当前 ROI " + fmtRoi(p.roi) + " < -100%\n" +
+        "将以【市价单】买入加仓 " + trimNum(p.qty) + " " + p.symbol + " " + p.detail + "\n" +
         (p.hasShort ? "（注：该交易对存在空单，工具已忽略空单）\n" : "") + "\n确认执行？";
     }
     $("planTitle").textContent = title;
