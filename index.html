@@ -67,6 +67,16 @@
   /* 不同币种之间的空行分隔（与桌面版一致） */
   tbody tr.coin-gap td { background: #0c1e3e; height: 18px; padding: 0; border: none; }
   tbody tr.coin-gap:hover td { background: #0c1e3e; }
+  /* 账户分段标题行：账户1 · USDT → 账户1 · USDC → 账户2 · USDT → … */
+  tbody tr.acct-band td {
+    background: #0f2440; color: #7fc4ff; font-weight: 600; letter-spacing: .3px;
+    padding: 6px 10px; border-top: 1px solid #2c5aa8; border-bottom: 1px solid #2c5aa8;
+  }
+  tbody tr.acct-band.band-1 td { background: #0c1e35; }
+  tbody tr.acct-band:hover td { background: #14324f; }
+  tbody tr.acct-band td .band-sub {
+    color: #5f86ad; font-weight: 400; margin-left: 10px; font-size: 12px;
+  }
   td.sym { font-weight: 600; color: #ffffff; padding-left: 10px; background: #1b4fa0; }
   thead th.sym { background: #1b4fa0; color: #ffffff; border-bottom: 1px solid #2c5aa8; }
   td.num, th.num { text-align: right; color: #c3d1e2; }
@@ -627,36 +637,31 @@ async function onFetch() {
     }
     await Promise.all(jobs);
 
-    // 排序（与桌面版 sort_base_order 一致）
-    const baseMap = {}, baseOrder = [];
+    // 排序：按账户分段 —— 账户1 的 USDT 对 → 账户1 的 USDC 对 → 账户2 的 USDT 对 → 账户2 的 USDC 对 → …
+    const baseOrder = [];                     // 币种原始顺序，仅用于同金额时的稳定排序
+    const baseIdx = {};
     ALL_PAIRS.forEach(sym => {
-      const base = sym.slice(0, -4), suffix = sym.slice(-4);
-      if (!baseMap[base]) { baseMap[base] = {}; baseOrder.push(base); }
-      baseMap[base][suffix] = sym;
+      const base = sym.slice(0, -4);
+      if (!(base in baseIdx)) { baseIdx[base] = baseOrder.length; baseOrder.push(base); }
     });
     const rowMaps = results.map(r => (r && r.ok) ? r.rows : null);
-    const sortedBases = [...baseOrder].sort((a, b) => {
-      const ka = groupKey(a, baseMap, rowMaps), kb = groupKey(b, baseMap, rowMaps);
-      if (ka.count !== kb.count) return kb.count - ka.count;
-      if (ka.total !== kb.total) return kb.total - ka.total;
-      return 0; // 稳定排序：无仓位的组保持原顺序排最后
-    });
-    function groupKey(base, baseMap, rowMaps) {
-      const syms = ["USDT", "USDC"].map(k => baseMap[base][k]).filter(Boolean);
-      let total = 0, count = 0;
-      rowMaps.forEach(rm => {
-        if (!rm) return;
-        syms.forEach(s => {
-          const r = rm[s];
-          if (r && r.notional > 0) { total += r.notional; count++; }
+
+    const sections = [];                      // 每个元素 = 一个「账户 + 计价币」分段
+    const heldSyms = new Set();               // 任一账户有多单的交易对
+    for (let i = 0; i < ACCOUNT_COUNT; i++) {
+      const rm = rowMaps[i];
+      if (!rm) continue;                      // 未配置/拉取失败的账户不出分段
+      ["USDT", "USDC"].forEach(quote => {
+        const syms = ALL_PAIRS.filter(s => s.slice(-4) === quote && rm[s] && rm[s].notional > 0);
+        syms.forEach(s => heldSyms.add(s));
+        if (!syms.length) return;
+        syms.sort((a, b) => {
+          const d = rm[b].notional - rm[a].notional;   // 该账户内仓位金额从大到小
+          return d !== 0 ? d : (baseIdx[a.slice(0, -4)] - baseIdx[b.slice(0, -4)]);
         });
+        sections.push({idx: i, name: ACCOUNT_NAMES[i], quote, syms});
       });
-      return {count, total};
     }
-    const order = [];
-    sortedBases.forEach(base => {
-      ["USDT", "USDC"].forEach(k => { if (baseMap[base][k]) order.push(baseMap[base][k]); });
-    });
 
     const accounts = [];
     let cleanedTotal = 0;
@@ -668,7 +673,7 @@ async function onFetch() {
       else { entry.status = "ok"; entry.rows = r.rows; cleanedTotal += r.cleaned; }
       accounts.push(entry);
     }
-    state.data = {order, accounts, cleaned_total: cleanedTotal};
+    state.data = {sections, heldSyms, accounts, cleaned_total: cleanedTotal};
     render();
   } catch (e) {
     $("status").textContent = "获取失败：" + e.message;
@@ -861,45 +866,70 @@ function render() {
 
   const tbody = $("gridBody");
   tbody.innerHTML = "";
-  const shown = data.order.filter(s => state.groupPairs.has(s));
   const totalCols = 1 + data.accounts.length * 4;
-  let lastBase = null, groupNo = 0;
-  shown.forEach(sym => {
-    const base = sym.slice(0, -4);
-    if (lastBase !== null && base !== lastBase) {
-      const gap = document.createElement("tr");
-      gap.className = "coin-gap";
-      gap.innerHTML = "<td colspan='" + totalCols + "'></td>";
-      tbody.appendChild(gap);
-      groupNo++;
-    }
-    lastBase = base;
+  const shownSyms = new Set();
+  let bandNo = 0;
+
+  // 分段标题行（账户1 · USDT / 账户1 · USDC / 账户2 · USDT …）
+  function appendBand(label, sub) {
     const tr = document.createElement("tr");
-    tr.className = (groupNo % 2 === 0) ? "stripe-0" : "stripe-1";
-    let html = "<td class='sym'>" + esc(sym) + "</td>";
-    data.accounts.forEach(a => {
-      html += "<td class='sep'></td>";
-      if (a.status === "ok") {
-        const r = a.rows[sym];
-        if (r && r.notional > 0) {
-          html += "<td class='num mono'>" + fmtMoney(r.notional) + "</td>";
-          html += "<td class='num mono " + roiClass(r.roi) + "'>" + fmtRoi(r.roi) + "</td>";
-        } else {
-          html += "<td class='num'></td><td class='num'></td>";
-        }
-        const cfg = state.configured[a.idx];
-        html += "<td class='center'>" + (cfg
-          ? "<button class='btn-add' data-sym='" + esc(sym) + "' data-i='" + a.idx + "'>加仓" + (a.idx + 1) + "</button>"
-          : "") + "</td>";
-      } else if (a.status === "error") {
-        html += "<td class='num' style='color:#f53f3f'>失败</td><td class='num'></td><td class='center'></td>";
-      } else {
-        html += "<td class='num'></td><td class='num'></td><td class='center'></td>";
-      }
-    });
-    tr.innerHTML = html;
+    tr.className = "acct-band band-" + (bandNo % 2);
+    tr.innerHTML = "<td colspan='" + totalCols + "'>" + esc(label) +
+      (sub ? "<span class='band-sub'>" + esc(sub) + "</span>" : "") + "</td>";
     tbody.appendChild(tr);
+    bandNo++;
+  }
+  // 交易对数据行（所有账户的列照常并排显示）
+  function appendRows(syms, stripe) {
+    syms.forEach(sym => {
+      shownSyms.add(sym);
+      const tr = document.createElement("tr");
+      tr.className = "stripe-" + stripe;
+      let html = "<td class='sym'>" + esc(sym) + "</td>";
+      data.accounts.forEach(a => {
+        html += "<td class='sep'></td>";
+        if (a.status === "ok") {
+          const r = a.rows[sym];
+          if (r && r.notional > 0) {
+            html += "<td class='num mono'>" + fmtMoney(r.notional) + "</td>";
+            html += "<td class='num mono " + roiClass(r.roi) + "'>" + fmtRoi(r.roi) + "</td>";
+          } else {
+            html += "<td class='num'></td><td class='num'></td>";
+          }
+          const cfg = state.configured[a.idx];
+          html += "<td class='center'>" + (cfg
+            ? "<button class='btn-add' data-sym='" + esc(sym) + "' data-i='" + a.idx + "'>加仓" + (a.idx + 1) + "</button>"
+            : "") + "</td>";
+        } else if (a.status === "error") {
+          html += "<td class='num' style='color:#f53f3f'>失败</td><td class='num'></td><td class='center'></td>";
+        } else {
+          html += "<td class='num'></td><td class='num'></td><td class='center'></td>";
+        }
+      });
+      tr.innerHTML = html;
+      tbody.appendChild(tr);
+    });
+  }
+
+  // 账户优先：账户1 的 USDT 对 → 账户1 的 USDC 对 → 账户2 的 USDT 对 → 账户2 的 USDC 对 → …
+  (data.sections || []).forEach((sec, si) => {
+    const syms = sec.syms.filter(s => state.groupPairs.has(s));
+    if (!syms.length) return;
+    const acct = data.accounts[sec.idx];
+    const rm = (acct && acct.rows) || {};
+    let total = 0;
+    syms.forEach(s => { const r = rm[s]; if (r && r.notional > 0) total += r.notional; });
+    appendBand(sec.name + " · " + sec.quote, syms.length + " 对 · 合计 " + fmtMoney(total) + " U");
+    appendRows(syms, si % 2);
   });
+
+  // 所有账户都没有多单的交易对统一放到最后，保证还能对任意账户「加仓」（无仓即开仓）
+  const rest = ALL_PAIRS.filter(s => state.groupPairs.has(s) && !(data.heldSyms && data.heldSyms.has(s)));
+  if (rest.length) {
+    const anyOk = data.accounts.some(a => a.status === "ok");
+    appendBand(anyOk ? "各账户均无持仓" : "未能获取账户数据", rest.length + " 对");
+    appendRows(rest, ((data.sections || []).length) % 2);
+  }
   bindAddButtons();
 
   const parts = [];
@@ -916,7 +946,7 @@ function render() {
     }
   });
   $("status").textContent = "获取成功（" + $("groupSel").selectedOptions[0].textContent + "）：" + parts.join(" | ");
-  $("summary").textContent = "已加载 " + shown.length + " 个交易对";
+  $("summary").textContent = "已加载 " + shownSyms.size + " 个交易对 · 按账户分段（账户1 USDT → USDC → 账户2 …）";
   $("cleaned").textContent = data.cleaned_total ? "撤销失效止损单 " + data.cleaned_total + " 个" : "";
 }
 function th(text, cls, extra) {
