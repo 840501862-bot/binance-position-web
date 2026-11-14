@@ -71,6 +71,16 @@
   /* 账户之间的分隔：每个账户第一个块（USDT）左侧画一条竖线 */
   td.sym.acct-first { border-left: 2px solid #0c1e3e; }
   thead th.acct-head { border-left: 2px solid #0c1e3e; }
+  /* 方向列：多单 / 空单（横向滚动时固定在左侧） */
+  thead th.dir-head, tbody td.dir {
+    position: sticky; left: 0; z-index: 3;
+    width: 54px; min-width: 54px; max-width: 54px;
+    background: #102a4d; text-align: center; white-space: nowrap;
+    font-weight: 600; border-right: 2px solid #0c1e3e;
+  }
+  thead th.dir-head { z-index: 4; color: #9cc3ff; }
+  tbody td.dir-long { color: #4dc3ff; }
+  tbody td.dir-short { color: #ffb74d; }
   thead th.sym { background: #1b4fa0; color: #ffffff; border-bottom: 1px solid #2c5aa8; }
   td.num, th.num { text-align: right; color: #c3d1e2; }
   td.center, th.center { text-align: center; }
@@ -118,7 +128,7 @@
 <body>
 
 <header>
-  <h1>币安主流币仓位信息 <span class="sub">网页版 · 6 账户 · 只统计多单 · 纯浏览器直连</span></h1>
+  <h1>币安主流币仓位信息 <span class="sub">网页版 · 6 账户 · 多单 / 空单 · 纯浏览器直连</span></h1>
   <button id="btnSettings">设置</button>
 </header>
 
@@ -399,18 +409,20 @@ function positionRoi(pos) {
   return unrealized / margin * 100;
 }
 // 只统计多单：positionAmt>0 的行合并成一行
-function computePosition(symbol, rows) {
+// 只统计空单：positionAmt<0 的行合并成一行（side 传 "SHORT"）
+function computePosition(symbol, rows, side) {
+  const short = side === "SHORT";
   let totalNotional = 0, totalUnrealized = 0, totalMargin = 0;
   (rows || []).forEach(pos => {
     const amt = toFloat(pos.positionAmt);
-    if (amt <= 0) return;
+    if (short ? amt >= 0 : amt <= 0) return;
     const mark = toFloat(pos.markPrice);
-    totalNotional += amt * mark;
+    totalNotional += Math.abs(amt) * mark;
     totalUnrealized += toFloat(pos.unRealizedProfit);
     totalMargin += positionMargin(pos);
   });
   const roi = totalMargin > 0 ? totalUnrealized / totalMargin * 100 : 0;
-  return {symbol, notional: totalNotional, unrealized: totalUnrealized, roi};
+  return {symbol, notional: totalNotional, unrealized: totalUnrealized, roi, side: short ? "SHORT" : "LONG"};
 }
 async function calcOpenQty(symbol) {
   const minN = await minNotional(symbol);
@@ -608,11 +620,14 @@ async function onFetch() {
           const positions = await fetchPositions(key, secret);
           const posMap = {};
           positions.forEach(p => { (posMap[p.symbol] = posMap[p.symbol] || []).push(p); });
-          const rows = {};
+          const rows = {}, rowsShort = {};
           ALL_PAIRS.forEach(sym => {
             const r = computePosition(sym, posMap[sym] || []);
             r.roi = scaleRoi(is5x, r.roi);
             rows[sym] = r;
+            const rs = computePosition(sym, posMap[sym] || [], "SHORT");
+            rs.roi = scaleRoi(is5x, rs.roi);
+            rowsShort[sym] = rs;
           });
           const openSides = {};
           positions.forEach(p => {
@@ -622,7 +637,7 @@ async function onFetch() {
             }
           });
           const cleaned = await cleanupStaleSl(key, secret, ACCOUNT_NAMES[i], openSides);
-          results[i] = {ok: true, rows, cleaned};
+          results[i] = {ok: true, rows, rowsShort, cleaned};
         } catch (e) {
           results[i] = {ok: false, error: (e && e.message) || String(e)};
         }
@@ -668,7 +683,7 @@ async function onFetch() {
       const entry = {idx: i, name: ACCOUNT_NAMES[i]};
       if (r === null) entry.status = "unconfigured";
       else if (!r.ok) { entry.status = "error"; entry.error = r.error; }
-      else { entry.status = "ok"; entry.rows = r.rows; cleanedTotal += r.cleaned; }
+      else { entry.status = "ok"; entry.rows = r.rows; entry.rowsShort = r.rowsShort; cleanedTotal += r.cleaned; }
       accounts.push(entry);
     }
     state.data = {order, bases: sortedBases, accounts, cleaned_total: cleanedTotal};
@@ -843,7 +858,8 @@ async function onPlanOk() {
 }
 
 // ==================== 表格渲染 ====================
-// 每行 = 一个币种；行内从左到右：账户1 的 USDT 块 → 账户1 的 USDC 块 → 账户2 的 USDT 块 → 账户2 的 USDC 块 → …
+// 交易对块：账户1 的 USDT 块 → 账户1 的 USDC 块 → 账户2 的 USDT 块 → 账户2 的 USDC 块 → …
+// 每个币种两行：第一行多单，紧跟下一行空单
 // 每个块 = 交易对名 + 仓位 + ROI + 加仓按钮
 function render() {
   const data = state.data;
@@ -851,7 +867,7 @@ function render() {
   $("emptyHint").style.display = "none";
   const head = $("headRow");
   head.innerHTML = "";
-  let h = "";
+  let h = "<th class='dir-head'>方向</th>";
   data.accounts.forEach(a => {
     const k = loadKeys()[a.idx] || {};
     const fiveTag = k.is5x ? " <span class='tag' style='background:rgba(124,58,237,.2);color:#a78bfa;'>5x</span>" : "";
@@ -865,36 +881,41 @@ function render() {
   const baseSet = new Set(shown.map(s => s.slice(0, -4)));
   const bases = (data.bases || []).filter(b => baseSet.has(b));
 
-  bases.forEach((base, rowNo) => {
-    const tr = document.createElement("tr");
-    tr.className = (rowNo % 2 === 0) ? "stripe-0" : "stripe-1";
-    let html = "";
-    data.accounts.forEach((a, ai) => {
-      ["USDT", "USDC"].forEach(quote => {
-        const sym = base + quote;
-        html += "<td class='sym" + (ai > 0 && quote === "USDT" ? " acct-first" : "") + "'>" + esc(sym) + "</td>";
-        if (a.status === "ok") {
-          const r = a.rows[sym];
-          if (r && r.notional > 0) {
-            html += "<td class='num mono'>" + fmtMoney(r.notional) + "</td>";
-            html += "<td class='num mono " + roiClass(r.roi) + "'>" + fmtRoi(r.roi) + "</td>";
+  bases.forEach(base => {
+    ["LONG", "SHORT"].forEach(side => {
+      const tr = document.createElement("tr");
+      tr.className = side === "LONG" ? "stripe-0" : "stripe-1";
+      let html = "<td class='dir " + (side === "LONG" ? "dir-long" : "dir-short") + "'>" +
+        (side === "LONG" ? "多单" : "空单") + "</td>";
+      data.accounts.forEach((a, ai) => {
+        ["USDT", "USDC"].forEach(quote => {
+          const sym = base + quote;
+          html += "<td class='sym" + (ai > 0 && quote === "USDT" ? " acct-first" : "") + "'>" + esc(sym) + "</td>";
+          if (a.status === "ok") {
+            const r = (side === "LONG" ? a.rows : a.rowsShort)[sym];
+            if (r && r.notional > 0) {
+              html += "<td class='num mono'>" + fmtMoney(r.notional) + "</td>";
+              html += "<td class='num mono " + roiClass(r.roi) + "'>" + fmtRoi(r.roi) + "</td>";
+            } else {
+              html += "<td class='num'></td><td class='num'></td>";
+            }
+            // 空单行只显示仓位与 ROI，不给按钮（加仓/平仓规则目前只作用于多单）
+            html += "<td class='center'>" + (side === "LONG" && state.configured[a.idx]
+              ? "<button class='btn-add' data-sym='" + esc(sym) + "' data-i='" + a.idx + "'>加仓" + (a.idx + 1) + "</button>"
+              : "") + "</td>";
+          } else if (a.status === "error") {
+            // 「失败」只在该账户第一个块显示一次，避免每个块都重复
+            html += "<td class='num' style='color:#f53f3f'>" +
+              (side === "LONG" && quote === "USDT" ? "失败" : "") + "</td>";
+            html += "<td class='num'></td><td class='center'></td>";
           } else {
-            html += "<td class='num'></td><td class='num'></td>";
+            html += "<td class='num'></td><td class='num'></td><td class='center'></td>";
           }
-          html += "<td class='center'>" + (state.configured[a.idx]
-            ? "<button class='btn-add' data-sym='" + esc(sym) + "' data-i='" + a.idx + "'>加仓" + (a.idx + 1) + "</button>"
-            : "") + "</td>";
-        } else if (a.status === "error") {
-          // 「失败」只在该账户第一个块显示一次，避免每个块都重复
-          html += "<td class='num' style='color:#f53f3f'>" + (quote === "USDT" ? "失败" : "") + "</td>";
-          html += "<td class='num'></td><td class='center'></td>";
-        } else {
-          html += "<td class='num'></td><td class='num'></td><td class='center'></td>";
-        }
+        });
       });
+      tr.innerHTML = html;
+      tbody.appendChild(tr);
     });
-    tr.innerHTML = html;
-    tbody.appendChild(tr);
   });
   bindAddButtons();
 
