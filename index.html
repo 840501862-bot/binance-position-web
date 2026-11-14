@@ -48,33 +48,12 @@
 
   main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
   .table-wrap { flex: 1; overflow: auto; position: relative; background: #0c1e3e; }
-  table { border-collapse: collapse; width: max-content; }
-  /* 转置表：交易对横排在同一行表头 —— 账户1 的 USDT 对 → 账户1 的 USDC 对 → 账户2 的 USDT 对 → … */
+  table { border-collapse: collapse; width: 100%; min-width: 1750px; }
   thead th {
-    position: sticky; z-index: 2;
+    position: sticky; top: 0; z-index: 2;
     background: #1a3a6e; border-bottom: 1px solid #2c5aa8;
     padding: 7px 6px; font-weight: 600; white-space: nowrap; color: #8fa8c4;
   }
-  thead tr#bandRow th { top: 0; }
-  thead tr#headRow th { top: 29px; }
-  thead th.rowlab, tbody td.rowlab {
-    left: 0; width: 84px; min-width: 84px; max-width: 84px;
-    border-right: 2px solid #0c1e3e;
-  }
-  thead th.rowlab { z-index: 4; background: #14324f; color: #9cc3ff; }
-  tbody td.rowlab { position: sticky; z-index: 3; background: #1b4fa0; color: #cfe3ff;
-    font-weight: 600; text-align: center; }
-  th.band-th { text-align: center; background: #0f2440; color: #7fc4ff; }
-  th.band-th .band-sub { display: inline-block; color: #5f86ad; font-weight: 400;
-    margin-left: 10px; font-size: 11px; }
-  th.pair { text-align: center; color: #ffffff; background: #1b4fa0; min-width: 96px; }
-  th.sec-first, td.sec-first { border-left: 2px solid #0c1e3e; }
-  tbody tr.row-a td:not(.rowlab) { background: #3A7BD5; }
-  tbody tr.row-b td:not(.rowlab) { background: #4B8EDD; }
-  tbody tr.row-c td:not(.rowlab) { background: #356FB0; }
-  tbody tr.row-a:hover td:not(.rowlab),
-  tbody tr.row-b:hover td:not(.rowlab),
-  tbody tr.row-c:hover td:not(.rowlab) { filter: brightness(1.1); }
   thead th.acct-head { text-align: center; color: #c9ddf5; }
   thead th.acct-head .tag { display: inline-block; font-size: 11px; font-weight: 400;
     border-radius: 3px; padding: 0 5px; margin-left: 4px; }
@@ -98,8 +77,6 @@
     border-color: #2a5ca0; color: #6fb0ff;
   }
   td .btn-add:hover { background: #1a4d8f; color: #fff; }
-  td .btn-add.btn-mini { min-width: 0; padding: 1px 5px; font-size: 11px; margin: 0 1px; }
-  td .btn-add.btn-mini.own { background: #1a4d8f; border-color: #4a8fe0; color: #dcebff; font-weight: 600; }
   .pos-up { color: #ff5470; font-weight: 600; }
   .pos-dn { color: #3ddc97; font-weight: 600; }
   .empty { text-align: center; padding: 40px 0; color: #5f7d9e; }
@@ -155,10 +132,7 @@
 <main>
   <div class="table-wrap" id="tableWrap">
     <table id="grid">
-      <thead>
-        <tr id="bandRow"></tr>
-        <tr id="headRow"></tr>
-      </thead>
+      <thead><tr id="headRow"></tr></thead>
       <tbody id="gridBody"></tbody>
     </table>
     <div class="empty" id="emptyHint">点击「获取」拉取各账户仓位</div>
@@ -653,31 +627,36 @@ async function onFetch() {
     }
     await Promise.all(jobs);
 
-    // 排序：按账户分段 —— 账户1 的 USDT 对 → 账户1 的 USDC 对 → 账户2 的 USDT 对 → 账户2 的 USDC 对 → …
-    const baseOrder = [];                     // 币种原始顺序，仅用于同金额时的稳定排序
-    const baseIdx = {};
+    // 排序（与桌面版 sort_base_order 一致）
+    const baseMap = {}, baseOrder = [];
     ALL_PAIRS.forEach(sym => {
-      const base = sym.slice(0, -4);
-      if (!(base in baseIdx)) { baseIdx[base] = baseOrder.length; baseOrder.push(base); }
+      const base = sym.slice(0, -4), suffix = sym.slice(-4);
+      if (!baseMap[base]) { baseMap[base] = {}; baseOrder.push(base); }
+      baseMap[base][suffix] = sym;
     });
     const rowMaps = results.map(r => (r && r.ok) ? r.rows : null);
-
-    const sections = [];                      // 每个元素 = 一个「账户 + 计价币」分段
-    const heldSyms = new Set();               // 任一账户有多单的交易对
-    for (let i = 0; i < ACCOUNT_COUNT; i++) {
-      const rm = rowMaps[i];
-      if (!rm) continue;                      // 未配置/拉取失败的账户不出分段
-      ["USDT", "USDC"].forEach(quote => {
-        const syms = ALL_PAIRS.filter(s => s.slice(-4) === quote && rm[s] && rm[s].notional > 0);
-        syms.forEach(s => heldSyms.add(s));
-        if (!syms.length) return;
-        syms.sort((a, b) => {
-          const d = rm[b].notional - rm[a].notional;   // 该账户内仓位金额从大到小
-          return d !== 0 ? d : (baseIdx[a.slice(0, -4)] - baseIdx[b.slice(0, -4)]);
+    const sortedBases = [...baseOrder].sort((a, b) => {
+      const ka = groupKey(a, baseMap, rowMaps), kb = groupKey(b, baseMap, rowMaps);
+      if (ka.count !== kb.count) return kb.count - ka.count;
+      if (ka.total !== kb.total) return kb.total - ka.total;
+      return 0; // 稳定排序：无仓位的组保持原顺序排最后
+    });
+    function groupKey(base, baseMap, rowMaps) {
+      const syms = ["USDT", "USDC"].map(k => baseMap[base][k]).filter(Boolean);
+      let total = 0, count = 0;
+      rowMaps.forEach(rm => {
+        if (!rm) return;
+        syms.forEach(s => {
+          const r = rm[s];
+          if (r && r.notional > 0) { total += r.notional; count++; }
         });
-        sections.push({idx: i, name: ACCOUNT_NAMES[i], quote, syms});
       });
+      return {count, total};
     }
+    const order = [];
+    sortedBases.forEach(base => {
+      ["USDT", "USDC"].forEach(k => { if (baseMap[base][k]) order.push(baseMap[base][k]); });
+    });
 
     const accounts = [];
     let cleanedTotal = 0;
@@ -689,7 +668,7 @@ async function onFetch() {
       else { entry.status = "ok"; entry.rows = r.rows; cleanedTotal += r.cleaned; }
       accounts.push(entry);
     }
-    state.data = {sections, heldSyms, accounts, cleaned_total: cleanedTotal};
+    state.data = {order, accounts, cleaned_total: cleanedTotal};
     render();
   } catch (e) {
     $("status").textContent = "获取失败：" + e.message;
@@ -860,90 +839,64 @@ async function onPlanOk() {
   }
 }
 
-// ==================== 表格渲染（转置：交易对横排在表头同一行） ====================
+// ==================== 表格渲染 ====================
 function render() {
   const data = state.data;
   if (!data) return;
   $("emptyHint").style.display = "none";
-  const bandRow = $("bandRow"), head = $("headRow"), tbody = $("gridBody");
-  bandRow.innerHTML = ""; head.innerHTML = ""; tbody.innerHTML = "";
-
-  // 账户优先排列：账户1 的 USDT 对 → 账户1 的 USDC 对 → 账户2 的 USDT 对 → 账户2 的 USDC 对 → …
-  const groups = [];
-  (data.sections || []).forEach(sec => {
-    const syms = sec.syms.filter(s => state.groupPairs.has(s));
-    if (!syms.length) return;
-    const rm = (data.accounts[sec.idx] && data.accounts[sec.idx].rows) || {};
-    let total = 0;
-    syms.forEach(s => { const r = rm[s]; if (r && r.notional > 0) total += r.notional; });
-    groups.push({idx: sec.idx, name: sec.name, quote: sec.quote, syms, total});
+  const head = $("headRow");
+  head.innerHTML = "";
+  let h = th("交易对", "sym");
+  data.accounts.forEach(a => {
+    h += th("", "center", "sep");
+    const cfg = state.configured[a.idx];
+    const k = loadKeys()[a.idx] || {};
+    const fiveTag = k.is5x ? " <span class='tag' style='background:rgba(124,58,237,.2);color:#a78bfa;'>5x</span>" : "";
+    h += "<th class='acct-head'>" + esc(a.name) + fiveTag + tagOf(a) + "</th>";
+    h += th(a.name + "仓位", "num");
+    h += th(a.name + "ROI", "num");
+    h += th("", "center");
   });
-  const anyOk = data.accounts.some(a => a.status === "ok");
-  const rest = ALL_PAIRS.filter(s => state.groupPairs.has(s) && !(data.heldSyms && data.heldSyms.has(s)));
-  const shownSyms = new Set();
-
-  // ---- 表头：上排账户分段（账户1 · USDT / 账户1 · USDC / …），下排交易对 ----
-  const fiveTag = idx => keysFor(idx).is5x
-    ? "<span style='background:rgba(124,58,237,.2);color:#a78bfa;font-size:11px;font-weight:400;border-radius:3px;padding:0 4px;margin-left:6px;'>5x</span>"
-    : "";
-  let b = "<th class='rowlab band-lab'>账户</th>";
-  let h = "<th class='rowlab'>交易对</th>";
-  groups.forEach((g, gi) => {
-    b += "<th class='band-th" + (gi ? " sec-first" : "") + "' colspan='" + g.syms.length + "'>" +
-      esc(g.name + " · " + g.quote) + fiveTag(g.idx) +
-      "<span class='band-sub'>" + g.syms.length + " 对 · 合计 " + fmtMoney(g.total) + " U</span></th>";
-    g.syms.forEach((s, si) => {
-      shownSyms.add(s);
-      h += "<th class='pair" + (si === 0 ? " sec-first" : "") + "'>" + esc(s) + "</th>";
-    });
-  });
-  if (rest.length) {
-    b += "<th class='band-th sec-first' colspan='" + rest.length + "'>" +
-      (anyOk ? "各账户均无持仓" : "未能获取账户数据") +
-      "<span class='band-sub'>" + rest.length + " 对 · 数字按钮＝对应账户开仓</span></th>";
-    rest.forEach((s, si) => {
-      shownSyms.add(s);
-      h += "<th class='pair" + (si === 0 ? " sec-first" : "") + "'>" + esc(s) + "</th>";
-    });
-  }
-  bandRow.innerHTML = b;
   head.innerHTML = h;
 
-  // ---- 数据行：仓位 / ROI / 操作 ----
-  // 操作列：每个已配置账户一个数字按钮（无仓即开仓）；ownIdx 为该列所属账户，高亮
-  function opButtons(sym, ownIdx) {
-    let out = "";
-    for (let i = 0; i < ACCOUNT_COUNT; i++) {
-      if (!state.configured[i]) continue;
-      out += "<button class='btn-add btn-mini" + (i === ownIdx ? " own" : "") +
-        "' data-sym='" + esc(sym) + "' data-i='" + i +
-        "' title='" + esc(ACCOUNT_NAMES[i] + " · " + sym) + "'>" + (i + 1) + "</button>";
+  const tbody = $("gridBody");
+  tbody.innerHTML = "";
+  const shown = data.order.filter(s => state.groupPairs.has(s));
+  const totalCols = 1 + data.accounts.length * 4;
+  let lastBase = null, groupNo = 0;
+  shown.forEach(sym => {
+    const base = sym.slice(0, -4);
+    if (lastBase !== null && base !== lastBase) {
+      const gap = document.createElement("tr");
+      gap.className = "coin-gap";
+      gap.innerHTML = "<td colspan='" + totalCols + "'></td>";
+      tbody.appendChild(gap);
+      groupNo++;
     }
-    return out;
-  }
-  let r1 = "<td class='rowlab'>仓位</td>", r2 = "<td class='rowlab'>ROI</td>", r3 = "<td class='rowlab'>操作</td>";
-  groups.forEach(g => {
-    const acct = data.accounts[g.idx] || {};
-    g.syms.forEach((s, si) => {
-      const first = si === 0 ? " sec-first" : "";
-      const row = acct.rows ? acct.rows[s] : null;
-      const has = row && row.notional > 0;
-      r1 += "<td class='num" + first + "'><span class='mono'>" + (has ? fmtMoney(row.notional) : "") + "</span></td>";
-      r2 += "<td class='num" + first + "'><span class='mono " + (has ? roiClass(row.roi) : "") + "'>" +
-        (has ? fmtRoi(row.roi) : "") + "</span></td>";
-      r3 += "<td class='center" + first + "'>" + opButtons(s, g.idx) + "</td>";
-    });
-  });
-  // 无仓交易对：仓位/ROI 留空，操作列同样给出各账户开仓按钮
-  rest.forEach((s, si) => {
-    const first = si === 0 ? " sec-first" : "";
-    r1 += "<td class='num" + first + "'></td>";
-    r2 += "<td class='num" + first + "'></td>";
-    r3 += "<td class='center" + first + "'>" + opButtons(s, -1) + "</td>";
-  });
-  [["row-a", r1], ["row-b", r2], ["row-c", r3]].forEach(([cls, html]) => {
+    lastBase = base;
     const tr = document.createElement("tr");
-    tr.className = cls;
+    tr.className = (groupNo % 2 === 0) ? "stripe-0" : "stripe-1";
+    let html = "<td class='sym'>" + esc(sym) + "</td>";
+    data.accounts.forEach(a => {
+      html += "<td class='sep'></td>";
+      if (a.status === "ok") {
+        const r = a.rows[sym];
+        if (r && r.notional > 0) {
+          html += "<td class='num mono'>" + fmtMoney(r.notional) + "</td>";
+          html += "<td class='num mono " + roiClass(r.roi) + "'>" + fmtRoi(r.roi) + "</td>";
+        } else {
+          html += "<td class='num'></td><td class='num'></td>";
+        }
+        const cfg = state.configured[a.idx];
+        html += "<td class='center'>" + (cfg
+          ? "<button class='btn-add' data-sym='" + esc(sym) + "' data-i='" + a.idx + "'>加仓" + (a.idx + 1) + "</button>"
+          : "") + "</td>";
+      } else if (a.status === "error") {
+        html += "<td class='num' style='color:#f53f3f'>失败</td><td class='num'></td><td class='center'></td>";
+      } else {
+        html += "<td class='num'></td><td class='num'></td><td class='center'></td>";
+      }
+    });
     tr.innerHTML = html;
     tbody.appendChild(tr);
   });
@@ -963,7 +916,7 @@ function render() {
     }
   });
   $("status").textContent = "获取成功（" + $("groupSel").selectedOptions[0].textContent + "）：" + parts.join(" | ");
-  $("summary").textContent = "已加载 " + shownSyms.size + " 个交易对 · 同一行按账户排列（账户1 USDT → USDC → 账户2 …）｜数字按钮 1-6 ＝ 对应账户加仓/开仓";
+  $("summary").textContent = "已加载 " + shown.length + " 个交易对";
   $("cleaned").textContent = data.cleaned_total ? "撤销失效止损单 " + data.cleaned_total + " 个" : "";
 }
 function th(text, cls, extra) {
