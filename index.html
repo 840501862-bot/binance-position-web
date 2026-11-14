@@ -54,7 +54,7 @@
     background: #1a3a6e; border-bottom: 1px solid #2c5aa8;
     padding: 7px 6px; font-weight: 600; white-space: nowrap; color: #8fa8c4;
   }
-  thead th.acct-head { text-align: center; color: #c9ddf5; }
+  thead th.acct-head { text-align: center; color: #c9ddf5; border-left: 2px solid #0c1e3e; }
   thead th.acct-head .tag { display: inline-block; font-size: 11px; font-weight: 400;
     border-radius: 3px; padding: 0 5px; margin-left: 4px; }
   .tag.ok { background: rgba(61,220,151,.15); color: #3ddc97; }
@@ -72,7 +72,6 @@
   td.sym { font-weight: 600; color: #ffffff; padding-left: 10px; background: #1b4fa0; }
   /* 账户之间的分隔：每个账户第一个块（USDT）左侧画一条竖线 */
   td.sym.acct-first { border-left: 2px solid #0c1e3e; }
-  thead th.acct-head { border-left: 2px solid #0c1e3e; }
   /* 方向列：多单 / 空单（横向滚动时固定在左侧） */
   thead th.dir-head, tbody td.dir {
     position: sticky; left: 0; z-index: 3;
@@ -83,10 +82,8 @@
   thead th.dir-head { z-index: 4; color: #9cc3ff; }
   tbody td.dir-long { color: #4dc3ff; }
   tbody td.dir-short { color: #ffb74d; }
-  thead th.sym { background: #1b4fa0; color: #ffffff; border-bottom: 1px solid #2c5aa8; }
-  td.num, th.num { text-align: right; color: #c3d1e2; }
-  td.center, th.center { text-align: center; }
-  td.sep { background: #3A7BD5; padding: 0; width: 2px !important; }
+  td.num { text-align: right; color: #c3d1e2; }
+  td.center { text-align: center; }
   td .btn-add {
     min-width: 58px; padding: 2px 10px; font-size: 12px; background: #16335f;
     border-color: #2a5ca0; color: #6fb0ff;
@@ -124,7 +121,6 @@
   .modal table.settings td:first-child { width: 56px; font-weight: 600; white-space: nowrap; color: #c9ddf5; }
   .modal table.settings input { width: 100%; }
   .hint { color: #5f7d9e; font-size: 12px; margin-top: 10px; }
-  #testResult { white-space: pre-wrap; font-family: Consolas, monospace; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -234,7 +230,6 @@ const state = {
   configured: [],
   fetching: false,
 };
-let groupIndex = 0;
 const $ = id => document.getElementById(id);
 
 // ==================== 密钥管理（仅存本浏览器） ====================
@@ -376,7 +371,6 @@ async function ensureEx() {
   });
 }
 const qtyPrec = async s => { await ensureEx(); return (exInfo[s] || [4, 4])[0]; };
-const pricePrec = async s => { await ensureEx(); return (exInfo[s] || [4, 4])[1]; };
 const minNotional = async s => { await ensureEx(); return (exFilters[s] || {}).minNotional || 0; };
 const lotStep = async s => { await ensureEx(); return (exFilters[s] || {}).stepSize || 0; };
 async function markPrice(symbol) {
@@ -454,42 +448,17 @@ async function calcAddQty(pos) {
   return {qty: round(qty, prec), minNotional: minN, notional};
 }
 function round(v, prec) { const f = Math.pow(10, prec); return Math.round(v * f) / f; }
-function calcStopPrice(pos) {
-  const amt = toFloat(pos.positionAmt);
-  const entry = toFloat(pos.entryPrice);
-  const unrealized = toFloat(pos.unRealizedProfit);
-  if (unrealized <= 0) throw new Error("当前没有浮盈（未实现盈亏≤0），无法设置浮盈50%止损");
-  if (amt === 0 || entry <= 0) throw new Error("持仓数量或开仓价为 0，无法设置止损");
-  const half = unrealized / 2, qty = Math.abs(amt);
-  return amt > 0 ? entry + half / qty : entry - half / qty;
-}
-function calcAddSlEstimate(pos, mark, addQty) {
-  const amt = toFloat(pos.positionAmt);
-  const entry = toFloat(pos.entryPrice);
-  const unrealized = toFloat(pos.unRealizedProfit);
-  if (unrealized <= 0) throw new Error("当前没有浮盈（未实现盈亏≤0），无法设置浮盈50%止损");
-  const qty = Math.abs(amt);
-  if (qty <= 0 || addQty <= 0) throw new Error("持仓数量或加仓数量为 0，无法计算止损");
-  const newQty = qty + addQty;
-  const avgEntry = (entry * qty + mark * addQty) / newQty;
-  const half = unrealized / 2;
-  return amt > 0 ? avgEntry + half / newQty : avgEntry - half / newQty;
-}
 
-// ==================== 开仓 / 加仓 / 止损 ====================
-async function openPosition(key, secret, symbol, quantity, side) {
-  const short = side === "SHORT";
+// ==================== 开仓 / 加仓 / 平仓 ====================
+// 市价单：按候选 positionSide 依次重试（覆盖双向/单向持仓模式）
+async function submitMarketOrder(key, secret, symbol, qty, side, candidates, reduceOnly) {
   const prec = await qtyPrec(symbol);
-  const dual = await getDualSide(key, secret);
-  const wanted = short ? "SHORT" : "LONG";
-  const candidates = dual ? [wanted, "BOTH"] : ["BOTH", wanted];
   let lastErr = null;
   for (const positionSide of candidates) {
+    const params = {symbol, side, type: "MARKET", quantity: qtyStr(qty, prec), positionSide};
+    if (reduceOnly) params.reduceOnly = "true";
     try {
-      return await bfSigned("POST", "/fapi/v1/order", {
-        symbol, side: short ? "SELL" : "BUY", type: "MARKET",
-        quantity: qtyStr(quantity, prec), positionSide,
-      }, key, secret);
+      return await bfSigned("POST", "/fapi/v1/order", params, key, secret);
     } catch (e) {
       if (e.message.indexOf("4061") >= 0 || /position side/i.test(e.message)) { lastErr = e; continue; }
       throw e;
@@ -498,94 +467,23 @@ async function openPosition(key, secret, symbol, quantity, side) {
   throw lastErr;
 }
 function qtyStr(q, prec) { return q.toFixed(prec); }
+async function openPosition(key, secret, symbol, quantity, side) {
+  const short = side === "SHORT";
+  const wanted = short ? "SHORT" : "LONG";
+  const dual = await getDualSide(key, secret);
+  return submitMarketOrder(key, secret, symbol, quantity, short ? "SELL" : "BUY",
+    dual ? [wanted, "BOTH"] : ["BOTH", wanted], false);
+}
 async function addPosition(key, secret, pos, quantity) {
-  const symbol = pos.symbol;
   const amt = toFloat(pos.positionAmt);
-  const prec = await qtyPrec(symbol);
-  const side = amt > 0 ? "BUY" : "SELL";
-  const posSide = pos.positionSide || (amt > 0 ? "LONG" : "SHORT");
-  const candidates = posSide === "BOTH" ? ["BOTH", amt > 0 ? "LONG" : "SHORT"] : [posSide, "BOTH"];
-  let lastErr = null;
-  for (const positionSide of candidates) {
-    try {
-      return await bfSigned("POST", "/fapi/v1/order", {
-        symbol, side, type: "MARKET", quantity: qtyStr(quantity, prec), positionSide,
-      }, key, secret);
-    } catch (e) {
-      if (e.message.indexOf("4061") >= 0 || /position side/i.test(e.message)) { lastErr = e; continue; }
-      throw e;
-    }
-  }
-  throw lastErr;
+  const wanted = amt > 0 ? "LONG" : "SHORT";
+  const posSide = pos.positionSide || wanted;
+  return submitMarketOrder(key, secret, pos.symbol, quantity, amt > 0 ? "BUY" : "SELL",
+    posSide === "BOTH" ? ["BOTH", wanted] : [posSide, "BOTH"], false);
 }
-function newClientAlgoId() {
-  // 币安要求 32 位字母数字：SL + 30 位随机 hex
-  const hex = Array.from(crypto.getRandomValues(new Uint8Array(15)))
-    .map(b => b.toString(16).padStart(2, "0")).join("");
-  return ("SL" + hex).toUpperCase().slice(0, 32);
-}
+// 撤销止损单（签名/时间同步/-1021 重试统一走 bfRequest）
 async function cancelAlgoOrder(key, secret, clientAlgoId) {
-  const params = {clientAlgoId};
-  const q = new URLSearchParams();
-  q.append("clientAlgoId", clientAlgoId);
-  q.append("timestamp", String(await nowMs()));
-  q.append("recvWindow", "10000");
-  const query = q.toString();
-  const sig = await hexSign(secret, query);
-  const resp = await fetch(FAPI + "/fapi/v1/algoOrder?" + query + "&signature=" + sig,
-    {method: "DELETE", headers: {"X-MBX-APIKEY": key}});
-  let data;
-  try { data = await resp.json(); } catch (e) { data = null; }
-  if (resp.status !== 200) {
-    if (data && data.code === -1021) {
-      await forceResync();
-      const q2 = new URLSearchParams();
-      q2.append("clientAlgoId", clientAlgoId);
-      q2.append("timestamp", String(await nowMs()));
-      q2.append("recvWindow", "10000");
-      const query2 = q2.toString();
-      const sig2 = await hexSign(secret, query2);
-      const resp2 = await fetch(FAPI + "/fapi/v1/algoOrder?" + query2 + "&signature=" + sig2,
-        {method: "DELETE", headers: {"X-MBX-APIKEY": key}});
-      try { data = await resp2.json(); } catch (e) { data = null; }
-      if (resp2.status === 200) return data;
-      throw new Error("撤销止损单失败（code -1021）：时间偏差过大，已重试仍失败");
-    }
-    throw new Error("撤销止损单失败：" + ((data && data.code !== undefined)
-      ? "code " + data.code + "：" + (data.msg || "") : "HTTP " + resp.status));
-  }
-  return data;
-}
-async function placeStopLoss(key, secret, pos) {
-  const symbol = pos.symbol;
-  const amt = toFloat(pos.positionAmt);
-  const entry = toFloat(pos.entryPrice);
-  const unrealized = toFloat(pos.unRealizedProfit);
-  if (unrealized <= 0) throw new Error("当前没有浮盈（未实现盈亏≤0），无法设置浮盈50%止损");
-  if (amt === 0) throw new Error("持仓数量为 0，无法设置止损");
-  const half = unrealized / 2, qty = Math.abs(amt);
-  const side = amt > 0 ? "SELL" : "BUY";
-  const prec = await pricePrec(symbol);
-  const stopPrice = round(entry + (amt > 0 ? half / qty : -half / qty), prec);
-  const posSide = pos.positionSide || (amt > 0 ? "LONG" : "SHORT");
-  const candidates = posSide === "BOTH" ? ["BOTH", amt > 0 ? "LONG" : "SHORT"] : [posSide, "BOTH"];
-  let lastErr = null;
-  for (const positionSide of candidates) {
-    const clientAlgoId = newClientAlgoId();
-    const algoParams = {
-      algoType: "CONDITIONAL", symbol, side, type: "STOP_MARKET",
-      triggerPrice: stopPrice.toFixed(prec), closePosition: "true",
-      positionSide, clientAlgoId,
-    };
-    try {
-      const data = await bfSigned("POST", "/fapi/v1/algoOrder", algoParams, key, secret);
-      return {stopPrice, data, clientAlgoId};
-    } catch (e) {
-      if (e.message.indexOf("4061") >= 0 || /position side/i.test(e.message)) { lastErr = e; continue; }
-      throw new Error("止损单提交失败：" + e.message);
-    }
-  }
-  throw lastErr;
+  return bfSigned("DELETE", "/fapi/v1/algoOrder", {clientAlgoId}, key, secret);
 }
 async function cleanupStaleSl(key, secret, accountName, openSides) {
   const orders = loadTracking();
@@ -753,27 +651,12 @@ async function buildPlan(symbol, acctIdx, key, secret, side) {
 }
 
 async function closePosition(key, secret, pos) {
-  const symbol = pos.symbol;
   const amt = toFloat(pos.positionAmt);
   const short = amt < 0;
-  const qty = Math.abs(amt);
-  const prec = await qtyPrec(symbol);
   const wanted = short ? "SHORT" : "LONG";
   const posSide = pos.positionSide || wanted;
-  const candidates = posSide === "BOTH" ? ["BOTH", wanted] : [posSide, "BOTH"];
-  let lastErr = null;
-  for (const positionSide of candidates) {
-    try {
-      return await bfSigned("POST", "/fapi/v1/order", {
-        symbol, side: short ? "BUY" : "SELL", type: "MARKET",
-        quantity: qtyStr(qty, prec), positionSide, reduceOnly: "true",
-      }, key, secret);
-    } catch (e) {
-      if (e.message.indexOf("4061") >= 0 || /position side/i.test(e.message)) { lastErr = e; continue; }
-      throw e;
-    }
-  }
-  throw lastErr;
+  return submitMarketOrder(key, secret, pos.symbol, Math.abs(amt), short ? "BUY" : "SELL",
+    posSide === "BOTH" ? ["BOTH", wanted] : [posSide, "BOTH"], true);
 }
 
 async function executePlan(p, key, secret) {
@@ -863,7 +746,6 @@ async function onPlan(symbol, acctIdx, side) {
     showInfo("查询失败", String(e.message));
   }
 }
-function fmtPrice(v) { return String(v == null ? "" : v); }
 
 async function onPlanOk() {
   const raw = $("planMask").dataset.plan;
@@ -968,10 +850,6 @@ function render() {
   $("summary").textContent = "已加载 " + shown.length + " 个交易对";
   $("cleaned").textContent = data.cleaned_total ? "撤销失效止损单 " + data.cleaned_total + " 个" : "";
 }
-function th(text, cls, extra) {
-  if (extra === "sep") return "<th class='sep' style='padding:0;width:2px;'></th>";
-  return "<th class='" + (cls || "") + "'>" + esc(text) + "</th>";
-}
 function tagOf(a) {
   if (a.status === "ok") return "<span class='tag ok'>OK</span>";
   if (a.status === "error") return "<span class='tag err'>失败</span>";
@@ -985,7 +863,7 @@ function bindAddButtons() {
 
 // ==================== 页面初始化 / 设置 ====================
 function applyGroup() {
-  groupIndex = parseInt($("groupSel").value, 10) || 0;
+  const groupIndex = parseInt($("groupSel").value, 10) || 0;
   const g = state.groups[groupIndex];
   state.groupPairs = new Set(g ? g.pairs : []);
   if (state.data) render();
@@ -1073,7 +951,6 @@ function init() {
     sel.appendChild(opt);
   });
   sel.selectedIndex = 0;
-  groupIndex = 0;
   applyGroup();
   buildSettings();
   $("status").textContent =
