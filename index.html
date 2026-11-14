@@ -383,10 +383,22 @@ async function fetchPositions(key, secret, symbol) {
   return bfSigned("GET", "/fapi/v2/positionRisk", symbol ? {symbol} : {}, key, secret);
 }
 const dualCache = new Map(); // api_key -> 是否双向持仓
+// 持仓模式以 /fapi/v1/positionSide/dual 为准（/fapi/v2/account 不返回该字段）
 async function getDualSide(key, secret) {
   if (!dualCache.has(key)) {
-    const d = await bfSigned("GET", "/fapi/v2/account", {}, key, secret);
-    dualCache.set(key, !!d.dualSidePosition);
+    let dual = false;
+    try {
+      const d = await bfSigned("GET", "/fapi/v1/positionSide/dual", {}, key, secret);
+      const v = d && d.dualSidePosition;
+      dual = (v === true || v === "true");
+    } catch (e) { /* 接口不可用时退回账户信息 */ }
+    if (!dual) {
+      try {
+        const d2 = await bfSigned("GET", "/fapi/v2/account", {}, key, secret);
+        if (d2 && d2.dualSidePosition === true) dual = true;
+      } catch (e) { /* 两个都失败才用 false */ }
+    }
+    dualCache.set(key, dual);
   }
   return dualCache.get(key);
 }
@@ -507,6 +519,7 @@ async function cleanupStaleSl(key, secret, accountName, openSides) {
 async function onFetch() {
   if (state.fetching) return;
   state.fetching = true;
+  dualCache.clear(); // 每次获取重新确认持仓模式
   const btn = $("btnFetch");
   btn.disabled = true;
   btn.textContent = "获取中…";
