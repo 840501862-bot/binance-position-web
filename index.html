@@ -65,8 +65,10 @@
   tbody tr.stripe-1 { background: #4B8EDD; }
   tbody tr:hover { background: #5B9BE0; }
   /* 不同币种之间的空行分隔（与桌面版一致） */
-  tbody tr.coin-gap td { background: #0c1e3e; height: 18px; padding: 0; border: none; }
+  tbody tr.coin-gap td { background: #0c1e3e; height: 22px; padding: 0; border: none; }
   tbody tr.coin-gap:hover td { background: #0c1e3e; }
+  /* 同一币种的多单/空单两行贴紧 */
+  tbody tr.coin-row td { padding-top: 5px; padding-bottom: 5px; }
   td.sym { font-weight: 600; color: #ffffff; padding-left: 10px; background: #1b4fa0; }
   /* 账户之间的分隔：每个账户第一个块（USDT）左侧画一条竖线 */
   td.sym.acct-first { border-left: 2px solid #0c1e3e; }
@@ -908,7 +910,7 @@ function render() {
   bases.forEach(base => {
     ["LONG", "SHORT"].forEach(side => {
       const tr = document.createElement("tr");
-      tr.className = side === "LONG" ? "stripe-0" : "stripe-1";
+      tr.className = "coin-row " + (side === "LONG" ? "stripe-0" : "stripe-1");
       let html = "<td class='dir " + (side === "LONG" ? "dir-long" : "dir-short") + "'>" +
         (side === "LONG" ? "多单" : "空单") + "</td>";
       data.accounts.forEach((a, ai) => {
@@ -941,6 +943,11 @@ function render() {
       tr.innerHTML = html;
       tbody.appendChild(tr);
     });
+    // 币种与币种之间留出间隔（多单/空单两行本身贴紧）
+    const gap = document.createElement("tr");
+    gap.className = "coin-gap";
+    gap.innerHTML = "<td colspan='" + (1 + data.accounts.length * 8) + "'></td>";
+    tbody.appendChild(gap);
   });
   bindAddButtons();
 
