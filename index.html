@@ -68,6 +68,9 @@
   tbody tr.coin-gap td { background: #0c1e3e; height: 18px; padding: 0; border: none; }
   tbody tr.coin-gap:hover td { background: #0c1e3e; }
   td.sym { font-weight: 600; color: #ffffff; padding-left: 10px; background: #1b4fa0; }
+  /* 账户之间的分隔：每个账户第一个块（USDT）左侧画一条竖线 */
+  td.sym.acct-first { border-left: 2px solid #0c1e3e; }
+  thead th.acct-head { border-left: 2px solid #0c1e3e; }
   thead th.sym { background: #1b4fa0; color: #ffffff; border-bottom: 1px solid #2c5aa8; }
   td.num, th.num { text-align: right; color: #c3d1e2; }
   td.center, th.center { text-align: center; }
@@ -668,7 +671,7 @@ async function onFetch() {
       else { entry.status = "ok"; entry.rows = r.rows; cleanedTotal += r.cleaned; }
       accounts.push(entry);
     }
-    state.data = {order, accounts, cleaned_total: cleanedTotal};
+    state.data = {order, bases: sortedBases, accounts, cleaned_total: cleanedTotal};
     render();
   } catch (e) {
     $("status").textContent = "获取失败：" + e.message;
@@ -840,62 +843,55 @@ async function onPlanOk() {
 }
 
 // ==================== 表格渲染 ====================
+// 每行 = 一个币种；行内从左到右：账户1 的 USDT 块 → 账户1 的 USDC 块 → 账户2 的 USDT 块 → 账户2 的 USDC 块 → …
+// 每个块 = 交易对名 + 仓位 + ROI + 加仓按钮
 function render() {
   const data = state.data;
   if (!data) return;
   $("emptyHint").style.display = "none";
   const head = $("headRow");
   head.innerHTML = "";
-  let h = th("交易对", "sym");
+  let h = "";
   data.accounts.forEach(a => {
-    h += th("", "center", "sep");
-    const cfg = state.configured[a.idx];
     const k = loadKeys()[a.idx] || {};
     const fiveTag = k.is5x ? " <span class='tag' style='background:rgba(124,58,237,.2);color:#a78bfa;'>5x</span>" : "";
-    h += "<th class='acct-head'>" + esc(a.name) + fiveTag + tagOf(a) + "</th>";
-    h += th(a.name + "仓位", "num");
-    h += th(a.name + "ROI", "num");
-    h += th("", "center");
+    h += "<th class='acct-head' colspan='8'>" + esc(a.name) + fiveTag + tagOf(a) + "</th>";
   });
   head.innerHTML = h;
 
   const tbody = $("gridBody");
   tbody.innerHTML = "";
   const shown = data.order.filter(s => state.groupPairs.has(s));
-  const totalCols = 1 + data.accounts.length * 4;
-  let lastBase = null, groupNo = 0;
-  shown.forEach(sym => {
-    const base = sym.slice(0, -4);
-    if (lastBase !== null && base !== lastBase) {
-      const gap = document.createElement("tr");
-      gap.className = "coin-gap";
-      gap.innerHTML = "<td colspan='" + totalCols + "'></td>";
-      tbody.appendChild(gap);
-      groupNo++;
-    }
-    lastBase = base;
+  const baseSet = new Set(shown.map(s => s.slice(0, -4)));
+  const bases = (data.bases || []).filter(b => baseSet.has(b));
+
+  bases.forEach((base, rowNo) => {
     const tr = document.createElement("tr");
-    tr.className = (groupNo % 2 === 0) ? "stripe-0" : "stripe-1";
-    let html = "<td class='sym'>" + esc(sym) + "</td>";
-    data.accounts.forEach(a => {
-      html += "<td class='sep'></td>";
-      if (a.status === "ok") {
-        const r = a.rows[sym];
-        if (r && r.notional > 0) {
-          html += "<td class='num mono'>" + fmtMoney(r.notional) + "</td>";
-          html += "<td class='num mono " + roiClass(r.roi) + "'>" + fmtRoi(r.roi) + "</td>";
+    tr.className = (rowNo % 2 === 0) ? "stripe-0" : "stripe-1";
+    let html = "";
+    data.accounts.forEach((a, ai) => {
+      ["USDT", "USDC"].forEach(quote => {
+        const sym = base + quote;
+        html += "<td class='sym" + (ai > 0 && quote === "USDT" ? " acct-first" : "") + "'>" + esc(sym) + "</td>";
+        if (a.status === "ok") {
+          const r = a.rows[sym];
+          if (r && r.notional > 0) {
+            html += "<td class='num mono'>" + fmtMoney(r.notional) + "</td>";
+            html += "<td class='num mono " + roiClass(r.roi) + "'>" + fmtRoi(r.roi) + "</td>";
+          } else {
+            html += "<td class='num'></td><td class='num'></td>";
+          }
+          html += "<td class='center'>" + (state.configured[a.idx]
+            ? "<button class='btn-add' data-sym='" + esc(sym) + "' data-i='" + a.idx + "'>加仓" + (a.idx + 1) + "</button>"
+            : "") + "</td>";
+        } else if (a.status === "error") {
+          // 「失败」只在该账户第一个块显示一次，避免每个块都重复
+          html += "<td class='num' style='color:#f53f3f'>" + (quote === "USDT" ? "失败" : "") + "</td>";
+          html += "<td class='num'></td><td class='center'></td>";
         } else {
-          html += "<td class='num'></td><td class='num'></td>";
+          html += "<td class='num'></td><td class='num'></td><td class='center'></td>";
         }
-        const cfg = state.configured[a.idx];
-        html += "<td class='center'>" + (cfg
-          ? "<button class='btn-add' data-sym='" + esc(sym) + "' data-i='" + a.idx + "'>加仓" + (a.idx + 1) + "</button>"
-          : "") + "</td>";
-      } else if (a.status === "error") {
-        html += "<td class='num' style='color:#f53f3f'>失败</td><td class='num'></td><td class='center'></td>";
-      } else {
-        html += "<td class='num'></td><td class='num'></td><td class='center'></td>";
-      }
+      });
     });
     tr.innerHTML = html;
     tbody.appendChild(tr);
