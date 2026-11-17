@@ -89,6 +89,15 @@
     border-color: #2a5ca0; color: #6fb0ff;
   }
   td .btn-add:hover { background: #1a4d8f; color: #fff; }
+  .acct-del {
+    padding: 0; width: 20px; height: 20px; line-height: 1; font-size: 12px;
+    background: transparent; border-color: #3b5578; color: #8fa8c4;
+  }
+  .acct-del:hover:not(:disabled) { background: #d92b45; border-color: #ff4d6d; color: #fff; }
+  .acct-del:disabled { opacity: .35; cursor: not-allowed; }
+  .acct-tools { margin-top: 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .acct-tools button { font-size: 12px; padding: 4px 12px; }
+  .acct-tools .tip { font-size: 12px; color: #7d93ab; }
   .pos-up { color: #ff5470; font-weight: 600; }
   .pos-dn { color: #3ddc97; font-weight: 600; }
   .empty { text-align: center; padding: 40px 0; color: #5f7d9e; }
@@ -120,13 +129,15 @@
   .modal table.settings td { padding: 5px 6px; border-bottom: none; }
   .modal table.settings td:first-child { width: 56px; font-weight: 600; white-space: nowrap; color: #c9ddf5; }
   .modal table.settings input { width: 100%; }
+  .modal table.settings .fivex { width: 58px; text-align: center; white-space: nowrap; font-size: 12px; padding-right: 10px; }
+  .modal table.settings .delcell { width: 40px; text-align: center; padding-left: 14px; }
   .hint { color: #5f7d9e; font-size: 12px; margin-top: 10px; }
 </style>
 </head>
 <body>
 
 <header>
-  <h1>币安主流币仓位信息 <span class="sub">网页版 · 6 账户 · 多单 / 空单 · 纯浏览器直连</span></h1>
+  <h1>币安主流币仓位信息 <span class="sub">网页版 · 账户数自适应 · 多单 / 空单 · 纯浏览器直连</span></h1>
   <button id="btnSettings">设置</button>
 </header>
 
@@ -159,10 +170,7 @@
 <div class="mask" id="settingsMask">
   <div class="modal">
     <h3>设置 · 账户密钥</h3>
-    <div class="body">
-      <table class="settings" id="settingsTable"></table>
-      <div class="hint" id="settingsHint"></div>
-    </div>
+    <div class="body"><table class="settings" id="settingsTable"></table><div class="acct-tools"><button id="btnAddAcct">＋ 添加账户</button><span class="tip">加几个账户就显示几列，不用凑满</span></div><div class="hint" id="settingsHint"></div></div>
     <div class="foot">
       <button id="btnTest">测试连接</button>
       <button id="btnSave">保存设置</button>
@@ -197,8 +205,7 @@
 
 // ==================== 常量与数据 ====================
 const FAPI = "https://fapi.binance.com";            // USDⓈ-M 合约
-const ACCOUNT_COUNT = 6;
-const ACCOUNT_NAMES = ["账户1", "账户2", "账户3", "账户4", "账户5", "账户6"];
+const MAX_ACCOUNT_COUNT = 20;                       // 账户数不固定，仅作上限保护
 const KEY_STORE = "bf_keys_v1";                     // localStorage 键名
 const SL_STORE = "bf_sl_orders_v1";                 // 本地止损单跟踪
 // 35 个基础币种（按交易对文件顺序，每组 USDT 在上、USDC 在下）
@@ -227,7 +234,7 @@ const state = {
   groups: buildPairGroups(),
   groupPairs: new Set(),
   data: null,
-  configured: [],
+  configured: {},
   fetching: false,
 };
 const $ = id => document.getElementById(id);
@@ -241,6 +248,19 @@ function saveKeys(keys) { localStorage.setItem(KEY_STORE, JSON.stringify(keys));
 function keysFor(i) {
   const k = loadKeys()[i] || {};
   return {key: (k.key || "").trim(), secret: (k.secret || "").trim(), is5x: !!k.is5x};
+}
+/* 账户数不固定：以"填了 key 或 secret"的槽位为准，至少留 1 个空位供填写 */
+function accountList() {
+  const keys = loadKeys();
+  const idxs = Object.keys(keys)
+    .filter(k => /^\d+$/.test(k) && keys[k] && ((keys[k].key || "").trim() || (keys[k].secret || "").trim()))
+    .map(Number).sort((a, b) => a - b);
+  return idxs.length ? idxs : [0];
+}
+/* 显示名按"第几个账户"连续编号（删掉中间账户后不会出现账户3、账户5 的断号） */
+function accountName(i) {
+  const pos = accountList().indexOf(i);
+  return "账户" + ((pos < 0 ? i : pos) + 1);
 }
 
 /* 5倍杠杆账户 ROI 等比缩放：实际 7.5% = 正常 100% */
@@ -502,7 +522,7 @@ async function cleanupStaleSl(key, secret, accountName, openSides) {
   if (!orders.length) return 0;
   const kept = [], canceled = [];
   for (const order of orders) {
-    const orderAcct = order.account || ACCOUNT_NAMES[0];
+    const orderAcct = order.account || accountName(0);
     if (accountName !== orderAcct) { kept.push(order); continue; }
     const openSet = (openSides[order.symbol] || new Set());
     if (openSet.has(order.positionSide || "BOTH")) { kept.push(order); continue; }
@@ -525,9 +545,10 @@ async function onFetch() {
   btn.textContent = "获取中…";
   $("status").textContent = "正在获取各账户仓位…";
   try {
-    const results = new Array(ACCOUNT_COUNT);
+    const acctIdxs = accountList();
+    const results = {};
     const jobs = [];
-    for (let i = 0; i < ACCOUNT_COUNT; i++) {
+    for (const i of acctIdxs) {
       const {key, secret, is5x} = keysFor(i);
       if (!key || !secret) { results[i] = null; continue; }
       jobs.push((async () => {
@@ -551,7 +572,7 @@ async function onFetch() {
                 .add(p.positionSide || "BOTH");
             }
           });
-          const cleaned = await cleanupStaleSl(key, secret, ACCOUNT_NAMES[i], openSides);
+          const cleaned = await cleanupStaleSl(key, secret, accountName(i), openSides);
           results[i] = {ok: true, rows, rowsShort, cleaned};
         } catch (e) {
           results[i] = {ok: false, error: (e && e.message) || String(e)};
@@ -567,7 +588,7 @@ async function onFetch() {
       if (!baseMap[base]) { baseMap[base] = {}; baseOrder.push(base); }
       baseMap[base][suffix] = sym;
     });
-    const rowMaps = results.map(r => (r && r.ok) ? r.rows : null);
+    const rowMaps = acctIdxs.map(i => (results[i] && results[i].ok) ? results[i].rows : null);
     const sortedBases = [...baseOrder].sort((a, b) => {
       const ka = groupKey(a, baseMap, rowMaps), kb = groupKey(b, baseMap, rowMaps);
       if (ka.count !== kb.count) return kb.count - ka.count;
@@ -593,14 +614,14 @@ async function onFetch() {
 
     const accounts = [];
     let cleanedTotal = 0;
-    for (let i = 0; i < ACCOUNT_COUNT; i++) {
+    acctIdxs.forEach((i, pos) => {
       const r = results[i];
-      const entry = {idx: i, name: ACCOUNT_NAMES[i]};
-      if (r === null) entry.status = "unconfigured";
+      const entry = {idx: i, pos: pos + 1, name: accountName(i)};
+      if (r === null || r === undefined) entry.status = "unconfigured";
       else if (!r.ok) { entry.status = "error"; entry.error = r.error; }
       else { entry.status = "ok"; entry.rows = r.rows; entry.rowsShort = r.rowsShort; cleanedTotal += r.cleaned; }
       accounts.push(entry);
-    }
+    });
     state.data = {order, bases: sortedBases, accounts, cleaned_total: cleanedTotal};
     render();
   } catch (e) {
@@ -622,7 +643,7 @@ async function buildPlan(symbol, acctIdx, key, secret, side) {
   const allRows = await fetchPositions(key, secret, symbol);
   const rows = allRows.filter(p => short ? toFloat(p.positionAmt) < 0 : toFloat(p.positionAmt) > 0);
   const otherSide = allRows.some(p => short ? toFloat(p.positionAmt) > 0 : toFloat(p.positionAmt) < 0);
-  const plan = {symbol, acctIdx, acctName: ACCOUNT_NAMES[acctIdx], side: short ? "SHORT" : "LONG", otherSide};
+  const plan = {symbol, acctIdx, acctName: accountName(acctIdx), side: short ? "SHORT" : "LONG", otherSide};
   if (rows.length > 1) {
     return Object.assign(plan, {action: "error", message: symbol + " 存在多个" + dirName + "持仓记录，请手动处理。"});
   }
@@ -716,7 +737,7 @@ async function onPlan(symbol, acctIdx, side) {
     ? "（注：该交易对存在" + (short ? "多单" : "空单") + "，本次只处理" + dirName + "）\n" : "");
   $("status").textContent = "正在查询 " + symbol + " " + dirName + " 最新持仓…";
   const {key, secret} = keysFor(acctIdx);
-  if (!key || !secret) { showInfo("提示", ACCOUNT_NAMES[acctIdx] + " 未填写密钥"); return; }
+  if (!key || !secret) { showInfo("提示", accountName(acctIdx) + " 未填写密钥"); return; }
   try {
     const p = await buildPlan(symbol, acctIdx, key, secret, short ? "SHORT" : "LONG");
     if (p.action === "error") {
@@ -823,7 +844,7 @@ function render() {
             // 多单/空单都带加仓按钮，data-side 决定方向（无仓时按最小仓位开仓）
             html += "<td class='center'>" + (state.configured[a.idx]
               ? "<button class='btn-add' data-sym='" + esc(sym) + "' data-i='" + a.idx +
-                "' data-side='" + side + "'>加仓" + (a.idx + 1) + "</button>"
+                "' data-side='" + side + "'>加仓" + (a.pos || (a.idx + 1)) + "</button>"
               : "") + "</td>";
           } else if (a.status === "error") {
             // 「失败」只在该账户第一个块显示一次，避免每个块都重复
@@ -886,45 +907,90 @@ function applyGroup() {
 function buildSettings() {
   const tbody = $("settingsTable");
   tbody.innerHTML = "";
-  for (let i = 0; i < ACCOUNT_COUNT; i++) {
+  const idxs = accountList();
+  idxs.forEach(i => {
     const k = keysFor(i);
-    const tr = document.createElement("tr");
-    tr.innerHTML =
-      "<td>" + esc(ACCOUNT_NAMES[i]) + "</td>" +
-      "<td><input type='text' placeholder='API Key' data-i='" + i +
-        "' data-f='key' value='" + esc(k.key) + "'></td>" +
-      "<td style='width:14px;'></td>" +
-      "<td><input type='password' placeholder='API Secret' data-i='" + i +
-        "' data-f='secret' value='" + esc(k.secret) + "'></td>" +
-      "<td style='width:40px;text-align:center;'><label title='勾选后ROI按7.5%=100%等比缩放'><input type='checkbox' data-i='" + i +
-        "' data-f='is5x' " + (k.is5x ? "checked" : "") + " style='cursor:pointer'> 5x</label></td>";
+    const tr = settingsRow(k);
     tbody.appendChild(tr);
+  });
+  renumberSettings();
+  updateSettingsHint();
+}
+
+/* 一行 = 一个账户：名称 + Key + Secret + 5x + 删除 */
+function settingsRow(k) {
+  const tr = document.createElement("tr");
+  tr.innerHTML =
+    "<td></td>" +
+    "<td><input type='text' placeholder='API Key' data-f='key' spellcheck='false' value='" + esc(k.key) + "'></td>" +
+    "<td style='width:14px;'></td>" +
+    "<td><input type='password' placeholder='API Secret' data-f='secret' autocomplete='new-password' spellcheck='false' value='" + esc(k.secret) + "'></td>" +
+    "<td class='fivex'><label title='勾选后ROI按7.5%=100%等比缩放'><input type='checkbox' data-f='is5x' " +
+      (k.is5x ? "checked" : "") + " style='cursor:pointer'> 5x</label></td>" +
+    "<td class='delcell'><button class='acct-del' title='删除该账户'>✕</button></td>";
+  tr.querySelector(".acct-del").onclick = () => {
+    if (document.querySelectorAll("#settingsTable tr").length <= 1) return;
+    tr.remove();
+    renumberSettings();
+    updateSettingsHint();
+  };
+  return tr;
+}
+
+/* 重排账户名，并保证至少留一行、只剩一行时禁用删除 */
+function renumberSettings() {
+  const rows = document.querySelectorAll("#settingsTable tr");
+  rows.forEach((tr, i) => {
+    tr.querySelector("td").textContent = "账户" + (i + 1);
+    tr.querySelector(".acct-del").disabled = rows.length <= 1;
+  });
+}
+
+function addAccountRow() {
+  const tbody = $("settingsTable");
+  if (tbody.querySelectorAll("tr").length >= MAX_ACCOUNT_COUNT) {
+    showInfo("提示", "最多支持 " + MAX_ACCOUNT_COUNT + " 个账户。");
+    return;
   }
-  const n = loadKeys();
-  const filled = Object.keys(n).filter(i => n[i].key && n[i].secret).length;
-  $("settingsHint").textContent = "密钥只保存在当前浏览器（localStorage），页面直接连接币安，无服务器中转。" +
-    (filled ? " 已配置 " + filled + " 个账户。" : "") +
-    " 换设备/换浏览器需重新填写一次。";
+  tbody.appendChild(settingsRow({key: "", secret: "", is5x: false}));
+  renumberSettings();
+  updateSettingsHint();
+  const input = tbody.querySelector("tr:last-child input[data-f=key]");
+  if (input) input.focus();
+}
+
+function updateSettingsHint() {
+  let filled = 0;
+  document.querySelectorAll("#settingsTable tr").forEach(tr => {
+    const key = tr.querySelector("input[data-f=key]").value.trim();
+    const secret = tr.querySelector("input[data-f=secret]").value.trim();
+    if (key && secret) filled++;
+  });
+  const n = document.querySelectorAll("#settingsTable tr").length;
+  $("settingsHint").textContent = "当前 " + n + " 个账户（已填 " + filled + " 个）。密钥只保存在当前浏览器（localStorage），页面直接连接币安，无服务器中转；换设备/换浏览器需重新填写一次。";
+}
+
+function refreshConfigured() {
+  state.configured = {};
+  accountList().forEach(i => {
+    const k = keysFor(i);
+    state.configured[i] = !!(k.key && k.secret);
+  });
 }
 
 function onSaveSettings() {
-  const keys = loadKeys();
+  const keys = {};
+  let n = 0;
   document.querySelectorAll("#settingsTable tr").forEach(tr => {
-    const idx = parseInt(tr.querySelector("input[data-f=key]").dataset.i, 10);
-    keys[idx] = {
-      key: tr.querySelector("input[data-f=key]").value.trim(),
-      secret: tr.querySelector("input[data-f=secret]").value.trim(),
-      is5x: tr.querySelector("input[data-f=is5x]").checked,
-    };
+    const key = tr.querySelector("input[data-f=key]").value.trim();
+    const secret = tr.querySelector("input[data-f=secret]").value.trim();
+    if (!key && !secret) return;   // 整行空着不占账户位
+    keys[n++] = {key, secret, is5x: tr.querySelector("input[data-f=is5x]").checked};
   });
   saveKeys(keys);
-  state.configured = [];
-  for (let i = 0; i < ACCOUNT_COUNT; i++) {
-    const k = keysFor(i);
-    state.configured.push(!!(k.key && k.secret));
-  }
+  refreshConfigured();
   if (state.data) render();
-  showInfo("保存成功", "密钥已保存到当前浏览器（localStorage）。\n换设备/换浏览器后需要在此重新填写。");
+  showInfo("保存成功", "已保存 " + n + " 个账户的密钥到当前浏览器（localStorage）。\n换设备/换浏览器后需要在此重新填写。");
   buildSettings();
 }
 
@@ -936,13 +1002,13 @@ async function onTest() {
     await bfPublic("/fapi/v1/ping");
     lines.push("① 币安公共接口：连接正常 ✓");
   } catch (e) { lines.push("① 币安公共接口失败：" + e.message); }
-  for (let i = 0; i < ACCOUNT_COUNT; i++) {
+  for (const i of accountList()) {
     const {key, secret} = keysFor(i);
-    if (!key || !secret) { lines.push("② " + ACCOUNT_NAMES[i] + "：未填密钥，跳过"); continue; }
+    if (!key || !secret) { lines.push("② " + accountName(i) + "：未填密钥，跳过"); continue; }
     try {
       const positions = await fetchPositions(key, secret);
-      lines.push("② " + ACCOUNT_NAMES[i] + " 签名持仓：OK " + positions.length + " 条 ✓");
-    } catch (e) { lines.push("② " + ACCOUNT_NAMES[i] + " 签名持仓失败：" + e.message); }
+      lines.push("② " + accountName(i) + " 签名持仓：OK " + positions.length + " 条 ✓");
+    } catch (e) { lines.push("② " + accountName(i) + " 签名持仓失败：" + e.message); }
   }
   $("btnTest").disabled = false;
   $("btnTest").textContent = "测试连接";
@@ -950,11 +1016,7 @@ async function onTest() {
 }
 
 function init() {
-  state.configured = [];
-  for (let i = 0; i < ACCOUNT_COUNT; i++) {
-    const k = keysFor(i);
-    state.configured.push(!!(k.key && k.secret));
-  }
+  refreshConfigured();
   const sel = $("groupSel");
   sel.innerHTML = "";
   state.groups.forEach((g, i) => {
@@ -977,6 +1039,7 @@ $("groupSel").onchange = applyGroup;
 $("btnSettings").onclick = () => { buildSettings(); $("settingsMask").classList.add("show"); };
 $("btnCloseSettings").onclick = () => hide($("settingsMask"));
 $("btnSave").onclick = onSaveSettings;
+$("btnAddAcct").onclick = addAccountRow;
 $("btnTest").onclick = onTest;
 $("btnPlanCancel").onclick = () => { hide($("planMask")); $("status").textContent = "已取消"; };
 $("btnPlanOk").onclick = onPlanOk;
