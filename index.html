@@ -61,6 +61,9 @@
   .tag.err { background: rgba(255,84,112,.16); color: #ff5470; }
   .tag.na  { background: rgba(125,147,171,.15); color: #7d93ab; }
   tbody td { border-bottom: 1px solid #2E6FBF; padding: 8px 6px; white-space: nowrap; }
+  /* 单条视图：去掉 1750px 最小宽度，避免一两条交易对也被撑出横向滚动 */
+  #grid.single-view { min-width: 0; }
+  #grid.single-view td.sym { min-width: 110px; }
   tbody tr.stripe-0 { background: #3A7BD5; }
   tbody tr.stripe-1 { background: #4B8EDD; }
   tbody tr:hover { background: #5B9BE0; }
@@ -101,6 +104,9 @@
   .pos-up { color: #ff5470; font-weight: 600; }
   .pos-dn { color: #3ddc97; font-weight: 600; }
   .empty { text-align: center; padding: 40px 0; color: #5f7d9e; }
+  .pairnav { display: inline-flex; align-items: center; gap: 8px; }
+  #pairPos { font-size: 12px; color: #8fa8c4; min-width: 92px; text-align: center; font-variant-numeric: tabular-nums; }
+  .pairnav button { min-width: 66px; }
 
   footer {
     background: #0a1322; border-top: 1px solid #20334d;
@@ -149,6 +155,12 @@
   <input type="text" id="paramB" placeholder="B" style="width:60px;text-align:center" spellcheck="false">
   <input type="text" id="paramC" placeholder="C" style="width:60px;text-align:center" spellcheck="false">
   <span id="status">就绪：正在加载配置…</span>
+  <div class="pairnav" id="pairNav">
+    <button id="btnPrevPair" title="上一条交易对">上一条</button>
+    <span id="pairPos">1 / 1</span>
+    <button id="btnNextPair" class="primary" title="下一条交易对">下一条</button>
+  </div>
+  <button id="btnViewMode" title="在单条与全部之间切换">看全部</button>
 </div>
 
 <main>
@@ -236,6 +248,8 @@ const state = {
   data: null,
   configured: {},
   fetching: false,
+  single: true,        // 单条视图：一屏只显示一条交易对的多单/空单
+  singleIdx: 0,
 };
 const $ = id => document.getElementById(id);
 
@@ -807,6 +821,10 @@ function render() {
   const data = state.data;
   if (!data) return;
   $("emptyHint").style.display = "none";
+  $("pairNav").style.display = state.single ? "inline-flex" : "none";
+  $("btnViewMode").textContent = state.single ? "看全部" : "单条模式";
+  $("grid").classList.toggle("single-view", state.single);
+  if (state.single) { renderSingle(data); return; }
   const head = $("headRow");
   head.innerHTML = "";
   let h = "<th class='dir-head'>方向</th>";
@@ -884,6 +902,80 @@ function render() {
   $("summary").textContent = "已加载 " + shown.length + " 个交易对";
   $("cleaned").textContent = data.cleaned_total ? "撤销失效止损单 " + data.cleaned_total + " 个" : "";
 }
+/* 单条视图：一屏只显示一条交易对的多单 / 空单，每个账户一块（交易对 + 数量 + ROI + 加仓） */
+function renderSingle(data) {
+  const shown = data.order.filter(s => state.groupPairs.has(s));
+  if (!shown.length) {
+    $("headRow").innerHTML = "";
+    $("gridBody").innerHTML = "";
+    $("pairPos").textContent = "0 / 0";
+    $("status").textContent = "当前分组下没有交易对";
+    return;
+  }
+  if (state.singleIdx >= shown.length) state.singleIdx = 0;
+  if (state.singleIdx < 0) state.singleIdx = shown.length - 1;
+  const sym = shown[state.singleIdx];
+
+  let h = "<th class='dir-head'>方向</th>";
+  data.accounts.forEach(a => {
+    const k = loadKeys()[a.idx] || {};
+    const fiveTag = k.is5x ? " <span class='tag' style='background:rgba(124,58,237,.2);color:#a78bfa;'>5x</span>" : "";
+    h += "<th class='acct-head' colspan='4'>" + esc(a.name) + fiveTag + tagOf(a) + "</th>";
+  });
+  $("headRow").innerHTML = h;
+
+  let html = "";
+  ["LONG", "SHORT"].forEach(side => {
+    html += "<tr class='coin-row " + (side === "LONG" ? "stripe-0" : "stripe-1") + "'>" +
+      "<td class='dir " + (side === "LONG" ? "dir-long" : "dir-short") + "'>" + (side === "LONG" ? "多单" : "空单") + "</td>";
+    data.accounts.forEach((a, ai) => {
+      html += "<td class='sym" + (ai > 0 ? " acct-first" : "") + "'>" + esc(sym) + "</td>";
+      if (a.status === "ok") {
+        const r = (side === "LONG" ? a.rows : a.rowsShort)[sym];
+        if (r && r.notional > 0) {
+          html += "<td class='num mono'>" + fmtMoney(r.notional) + "</td>" +
+            "<td class='num mono " + roiClass(r.roi) + "'>" + fmtRoi(r.roi) + "</td>";
+        } else {
+          html += "<td class='num'></td><td class='num'></td>";
+        }
+        html += "<td class='center'>" + (state.configured[a.idx]
+          ? "<button class='btn-add' data-sym='" + esc(sym) + "' data-i='" + a.idx +
+            "' data-side='" + side + "'>加仓" + (a.pos || (a.idx + 1)) + "</button>"
+          : "") + "</td>";
+      } else if (a.status === "error") {
+        html += "<td class='num' style='color:#f53f3f'>" + (side === "LONG" ? "失败" : "") +
+          "</td><td class='num'></td><td class='center'></td>";
+      } else {
+        html += "<td class='num'></td><td class='num'></td><td class='center'></td>";
+      }
+    });
+    html += "</tr>";
+  });
+  $("gridBody").innerHTML = html;
+  bindAddButtons();
+
+  $("pairPos").textContent = (state.singleIdx + 1) + " / " + shown.length + " · " + sym;
+  const parts = [];
+  data.accounts.forEach(a => {
+    if (a.status === "ok") {
+      const r = a.rows[sym];
+      parts.push(a.name + ":" + (r && r.notional > 0 ? fmtMoney(r.notional) + "U" : "无仓"));
+    } else if (a.status === "error") parts.push(a.name + " 失败");
+  });
+  $("status").textContent = "获取成功 · 单条视图 " + (state.singleIdx + 1) + "/" + shown.length +
+    "（" + sym + "）" + (parts.length ? " | " + parts.join(" | ") : "");
+  $("summary").textContent = "当前分组 " + shown.length + " 对 · 单条模式";
+  $("cleaned").textContent = data.cleaned_total ? "撤销失效止损单 " + data.cleaned_total + " 个" : "";
+}
+
+function stepPair(delta) {
+  if (!state.data) return;
+  const shown = state.data.order.filter(s => state.groupPairs.has(s));
+  if (!shown.length) return;
+  state.singleIdx = (state.singleIdx + delta + shown.length) % shown.length;
+  render();
+}
+
 function tagOf(a) {
   if (a.status === "ok") return "<span class='tag ok'>OK</span>";
   if (a.status === "error") return "<span class='tag err'>失败</span>";
@@ -900,8 +992,12 @@ function applyGroup() {
   const groupIndex = parseInt($("groupSel").value, 10) || 0;
   const g = state.groups[groupIndex];
   state.groupPairs = new Set(g ? g.pairs : []);
+  state.singleIdx = 0;
   if (state.data) render();
-  else $("summary").textContent = "当前分组：" + g.label + "（" + g.pairs.length + " 对）";
+  else {
+    $("summary").textContent = "当前分组：" + g.label + "（" + g.pairs.length + " 对）";
+    $("pairPos").textContent = "0 / " + (g ? g.pairs.length : 0);
+  }
 }
 
 function buildSettings() {
@@ -1028,6 +1124,8 @@ function init() {
   sel.selectedIndex = 0;
   applyGroup();
   buildSettings();
+  $("pairNav").style.display = state.single ? "inline-flex" : "none";
+  $("btnViewMode").textContent = state.single ? "看全部" : "单条模式";
   $("status").textContent =
     "就绪：已加载 " + ALL_PAIRS.length + " 个交易对（" + state.groups.length + " 组可选），当前显示「" +
     state.groups[0].label + "」，点击「获取」拉取数据";
@@ -1036,6 +1134,9 @@ function init() {
 // ---------------- 事件绑定 ----------------
 $("btnFetch").onclick = onFetch;
 $("groupSel").onchange = applyGroup;
+$("btnPrevPair").onclick = () => stepPair(-1);
+$("btnNextPair").onclick = () => stepPair(1);
+$("btnViewMode").onclick = () => { state.single = !state.single; render(); };
 $("btnSettings").onclick = () => { buildSettings(); $("settingsMask").classList.add("show"); };
 $("btnCloseSettings").onclick = () => hide($("settingsMask"));
 $("btnSave").onclick = onSaveSettings;
