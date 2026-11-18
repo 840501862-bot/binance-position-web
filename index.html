@@ -149,6 +149,7 @@
   <input type="text" id="paramB" placeholder="B" style="width:60px;text-align:center" spellcheck="false">
   <input type="text" id="paramC" placeholder="C" style="width:60px;text-align:center" spellcheck="false">
   <span id="status">就绪：正在加载配置…</span>
+  <button id="btnFilter" title="切换「只看需加仓/开仓」与全部交易对">显示全部</button>
 </div>
 
 <main>
@@ -236,6 +237,7 @@ const state = {
   data: null,
   configured: {},
   fetching: false,
+  onlyAction: true,   // 只看需要动作的币（同币的 USDT/USDC、多/空、所有账户视为一个整体）
 };
 const $ = id => document.getElementById(id);
 
@@ -799,7 +801,42 @@ async function onPlanOk() {
   }
 }
 
-// ==================== 表格渲染 ====================
+/* 只看需要动作的币：同一个币的 USDT+USDC、多单+空单、所有账户视为一个整体
+   没有任何仓位 → 显示（可以开最小仓）
+   全部仓位 ROI ≤ -100% → 显示（等量加仓）
+   只要有一个仓位 ROI > -100%（含正数、含 -99%）→ 整币隐藏 */
+function filterBases(data) {
+  const keep = [], drop = [];
+  (data.bases || []).forEach(base => {
+    let hasPos = false, allDeep = true;
+    data.accounts.forEach(a => {
+      if (a.status !== "ok") return;
+      ["USDT", "USDC"].forEach(q => {
+        const sym = base + q;
+        ["LONG", "SHORT"].forEach(side => {
+          const r = (side === "LONG" ? a.rows : a.rowsShort)[sym];
+          if (r && r.notional > 0) {
+            hasPos = true;
+            if (!(isFinite(r.roi) && r.roi <= -100)) allDeep = false;
+          }
+        });
+      });
+    });
+    if (!hasPos || allDeep) keep.push(base); else drop.push(base);
+  });
+  return {keep, drop};
+}
+
+function toggleFilter() {
+  state.onlyAction = !state.onlyAction;
+  $("btnFilter").textContent = state.onlyAction ? "显示全部" : "只看需加仓";
+  $("groupSel").disabled = state.onlyAction;
+  if (state.data) render();
+  else {
+    $("summary").textContent = state.onlyAction ? "只看需加仓 / 开仓（全部 70 对）" : "全部交易对";
+  }
+}
+
 // 交易对块：账户1 的 USDT 块 → 账户1 的 USDC 块 → 账户2 的 USDT 块 → 账户2 的 USDC 块 → …
 // 每个币种两行：第一行多单，紧跟下一行空单
 // 每个块 = 交易对名 + 仓位 + ROI + 加仓按钮
@@ -819,9 +856,20 @@ function render() {
 
   const tbody = $("gridBody");
   tbody.innerHTML = "";
-  const shown = data.order.filter(s => state.groupPairs.has(s));
-  const baseSet = new Set(shown.map(s => s.slice(0, -4)));
-  const bases = (data.bases || []).filter(b => baseSet.has(b));
+  const filterInfo = state.onlyAction ? filterBases(data) : null;
+  let bases;
+  if (filterInfo) {
+    bases = filterInfo.keep;
+  } else {
+    const shown = data.order.filter(s => state.groupPairs.has(s));
+    const baseSet = new Set(shown.map(s => s.slice(0, -4)));
+    bases = (data.bases || []).filter(b => baseSet.has(b));
+  }
+  $("groupSel").disabled = !!filterInfo;
+  if (filterInfo && !bases.length) {
+    $("emptyHint").style.display = "block";
+    $("emptyHint").textContent = "当前没有需要加仓 / 开仓的币（全部仓位 ROI 都在 -100% 以内）";
+  }
 
   bases.forEach(base => {
     ["LONG", "SHORT"].forEach(side => {
@@ -871,7 +919,7 @@ function render() {
   data.accounts.forEach(a => {
     if (a.status === "ok") {
       let n = 0, total = 0;
-      state.groupPairs.forEach(sym => {
+      ALL_PAIRS.forEach(sym => {
         const r = a.rows[sym];
         if (r && r.notional > 0) { n++; total += r.notional; }
       });
@@ -880,8 +928,14 @@ function render() {
       parts.push(a.name + " 失败");
     }
   });
-  $("status").textContent = "获取成功（" + $("groupSel").selectedOptions[0].textContent + "）：" + parts.join(" | ");
-  $("summary").textContent = "已加载 " + shown.length + " 个交易对";
+  if (filterInfo) {
+    $("status").textContent = "只看需加仓 / 开仓（全部 70 对）：显示 " + bases.length + " 个币，隐藏 " +
+      filterInfo.drop.length + " 个" + (parts.length ? " | " + parts.join(" | ") : "");
+    $("summary").textContent = "整表汇总 · 同币 USDT/USDC 合并判断";
+  } else {
+    $("status").textContent = "获取成功（" + $("groupSel").selectedOptions[0].textContent + "）：" + parts.join(" | ");
+    $("summary").textContent = "已加载 " + bases.length + " 个币 / " + (bases.length * 2) + " 个交易对";
+  }
   $("cleaned").textContent = data.cleaned_total ? "撤销失效止损单 " + data.cleaned_total + " 个" : "";
 }
 function tagOf(a) {
@@ -1028,6 +1082,8 @@ function init() {
   sel.selectedIndex = 0;
   applyGroup();
   buildSettings();
+  $("groupSel").disabled = state.onlyAction;
+  $("btnFilter").textContent = state.onlyAction ? "显示全部" : "只看需加仓";
   $("status").textContent =
     "就绪：已加载 " + ALL_PAIRS.length + " 个交易对（" + state.groups.length + " 组可选），当前显示「" +
     state.groups[0].label + "」，点击「获取」拉取数据";
@@ -1036,6 +1092,7 @@ function init() {
 // ---------------- 事件绑定 ----------------
 $("btnFetch").onclick = onFetch;
 $("groupSel").onchange = applyGroup;
+$("btnFilter").onclick = toggleFilter;
 $("btnSettings").onclick = () => { buildSettings(); $("settingsMask").classList.add("show"); };
 $("btnCloseSettings").onclick = () => hide($("settingsMask"));
 $("btnSave").onclick = onSaveSettings;
