@@ -110,6 +110,41 @@
   footer .summary { color: #c9ddf5; }
   #status { color: #4dc3ff; }
 
+  /* ===== 自动开仓控制栏 ===== */
+  .autobar {
+    background: #0b1a2f; border-bottom: 1px solid #20334d;
+    padding: 7px 16px; display: flex; align-items: center; gap: 14px;
+    flex-wrap: wrap; font-size: 12px; color: #8fa8c4;
+  }
+  .netpill {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 3px 11px; border-radius: 999px;
+    border: 1px solid #27405f; background: #101f37; color: #9fb4c9;
+  }
+  .netpill .dot { width: 8px; height: 8px; border-radius: 50%; background: #7d93ab; }
+  .netpill.ok  { border-color: rgba(61,220,151,.45); color: #3ddc97; }
+  .netpill.ok .dot  { background: #3ddc97; box-shadow: 0 0 6px rgba(61,220,151,.8); }
+  .netpill.bad { border-color: rgba(255,84,112,.5); color: #ff5470; }
+  .netpill.bad .dot { background: #ff5470; box-shadow: 0 0 6px rgba(255,84,112,.85); }
+  .autobar .cd b { color: #cfe3ff; font-size: 15px; }
+  .autobar .autostat { color: #9cc3ff; }
+  .autobar .slot { color: #ffb74d; }
+  .autolog {
+    max-height: 118px; overflow: auto; display: none;
+    background: #081525; border-bottom: 1px solid #1b2c45;
+    padding: 6px 16px; font-size: 12px; color: #8fa8c4;
+  }
+  .autolog.show { display: block; }
+  .autolog div { line-height: 1.75; white-space: pre-wrap; }
+  .autolog div .t { color: #5f7d9e; margin-right: 7px; }
+  .autolog .ok { color: #3ddc97; }
+  .autolog .err { color: #ff5470; }
+  td.sym .slotno {
+    display: inline-block; margin-left: 4px; font-size: 10px; font-weight: 400;
+    color: #93b4d6; background: rgba(255,255,255,.09);
+    border-radius: 3px; padding: 0 4px; vertical-align: middle;
+  }
+
   /* 弹窗 */
   .mask {
     position: fixed; inset: 0; background: rgba(3, 6, 12, .7);
@@ -148,6 +183,15 @@
   <span id="status">就绪：正在加载配置…</span>
   <button id="btnFilter" title="切换「只看需加仓/开仓」与全部交易对">显示全部</button>
 </div>
+
+<div class="autobar">
+  <span class="netpill" id="netPill"><i class="dot"></i><span id="netText">网络检测中…</span></span>
+  <button id="btnAuto" class="primary">开始</button>
+  <span class="cd">刷新倒计时 <b id="cdNum">--</b> 秒</span>
+  <span class="autostat" id="autoStat">未开始：点击「开始」后每 11 秒刷新一次，按序号补位开仓</span>
+  <span class="slot" id="slotInfo"></span>
+</div>
+<div class="autolog" id="autoLog"></div>
 
 <main>
   <div class="table-wrap" id="tableWrap">
@@ -539,7 +583,8 @@ async function cleanupStaleSl(key, secret, accountName, openSides) {
 }
 
 // ==================== 获取（主流程，与桌面版同口径） ====================
-async function onFetch() {
+async function onFetch(opts) {
+  const silent = !!(opts && opts.silent); // 自动模式下的失败不弹窗，只写日志
   if (state.fetching) return false;   // 已在拉取：交给调用方决定是否等待重拉
   state.fetching = true;
   dualCache.clear(); // 每次获取重新确认持仓模式
@@ -547,6 +592,7 @@ async function onFetch() {
   btn.disabled = true;
   btn.textContent = "获取中…";
   $("status").textContent = "正在获取各账户仓位…";
+  await pingNet(); // 顺便刷新网络状态灯
   try {
     const acctIdxs = accountList();
     const results = {};
@@ -630,13 +676,238 @@ async function onFetch() {
     return true;
   } catch (e) {
     $("status").textContent = "获取失败：" + e.message;
-    showInfo("获取失败", String(e.message));
+    if (silent) autoLog("获取失败：" + e.message, "err");
+    else showInfo("获取失败", String(e.message));
     return false;
   } finally {
     state.fetching = false;
     btn.disabled = false;
     btn.textContent = "获取";
   }
+}
+
+// ==================== 自动开仓（按序号顺序补位，只开仓不加仓） ====================
+// 编号规则：账户1 的 币1USDT多=1、币1USDT空=2、币1USDC多=3、币1USDC空=4，然后币2…
+//           账户2 从 (账户1 总数+1) 接着排，依此类推。账户按设置里填了密钥的账户顺序排。
+const AUTO_INTERVAL = 11;                       // 刷新间隔（秒）
+const SLOT_PER_ACCOUNT = BASES.length * 4;      // 每个账户的仓位格数
+
+const auto = {
+  running: false, busy: false, cd: 0, timer: null,
+  netOk: null, latency: 0, opened: 0, nextSlot: null, failed: new Set(),
+};
+
+function slotToNo(acctPos, coinIdx, quoteIdx, short) {
+  return acctPos * SLOT_PER_ACCOUNT + coinIdx * 4 + quoteIdx * 2 + (short ? 1 : 0) + 1;
+}
+function noToSlot(no) {
+  const idx = no - 1, per = SLOT_PER_ACCOUNT;
+  const acctPos = Math.floor(idx / per), rest = idx % per;
+  const coinIdx = Math.floor(rest / 4);
+  const quoteIdx = Math.floor((rest % 4) / 2);
+  const short = (rest % 2) === 1;
+  return {no, acctPos, coinIdx, quoteIdx, short,
+    sym: BASES[coinIdx] + (quoteIdx === 0 ? "USDT" : "USDC")};
+}
+// true=有仓 false=空仓 null=该账户数据不可用
+function slotOccupied(slot) {
+  const acct = state.data && state.data.accounts && state.data.accounts[slot.acctPos];
+  if (!acct || acct.status !== "ok") return null;
+  const r = (slot.short ? acct.rowsShort : acct.rows)[slot.sym];
+  return !!(r && r.notional > 0);
+}
+// 从 1 号开始找第一个空仓位（失败/跳过的格子不再重试）
+function scanFirstEmpty() {
+  const accts = (state.data && state.data.accounts) || [];
+  const totalAll = accts.length * SLOT_PER_ACCOUNT;
+  for (let no = 1; no <= totalAll; no++) {
+    if (auto.failed.has(no)) continue;
+    const slot = noToSlot(no);
+    if (slotOccupied(slot) === false) return slot;   // null = 未配置/获取失败，跳过
+  }
+  return null;
+}
+function autoLog(text, cls) {
+  const box = $("autoLog");
+  const d = document.createElement("div");
+  d.className = cls || "";
+  const t = new Date().toLocaleTimeString("zh-CN", {hour12: false});
+  d.innerHTML = "<span class='t'>" + t + "</span>" + esc(text);
+  box.appendChild(d);
+  while (box.children.length > 40) box.removeChild(box.firstChild);
+  box.scrollTop = box.scrollHeight;
+}
+function setNet(ok) {
+  auto.netOk = ok;
+  const pill = $("netPill");
+  pill.classList.toggle("ok", ok === true);
+  pill.classList.toggle("bad", ok === false);
+  $("netText").textContent = ok === null ? "网络检测中…"
+    : ok ? ("网络正常" + (auto.latency > 0 ? " " + auto.latency + "ms" : "")) : "网络异常";
+}
+async function pingNet() {
+  const t0 = performance.now();
+  try {
+    await bfPublic("/fapi/v1/ping");
+    auto.latency = Math.round(performance.now() - t0);
+    setNet(true);
+    return true;
+  } catch (e) {
+    auto.latency = 0;
+    setNet(false);
+    return false;
+  }
+}
+function showNextSlot(slot) {
+  if (!slot) { $("slotInfo").textContent = ""; return; }
+  const acct = state.data.accounts[slot.acctPos];
+  $("slotInfo").textContent = "下一个待开：No." + slot.no + " " + (acct ? acct.name : "") +
+    " " + slot.sym + " " + (slot.short ? "空单" : "多单");
+}
+// 开一个仓（市价、最小仓位，只开仓不加仓）；true=已开或可跳过，false=失败
+async function autoOpen(slot) {
+  const acct = state.data.accounts[slot.acctPos];
+  if (!acct || acct.status !== "ok") return true;
+  const dir = slot.short ? "空单" : "多单";
+  const {key, secret} = keysFor(acct.idx);
+  if (!key || !secret) return true;
+  // 单向持仓模式下，反向市价单会先把原持仓平掉，这种格子不自动开
+  const opp = (slot.short ? acct.rows : acct.rowsShort)[slot.sym];
+  if (opp && opp.notional > 0) {
+    let dual = false;
+    try { dual = await getDualSide(key, secret); } catch (e) {}
+    if (!dual) {
+      autoLog("No." + slot.no + " " + acct.name + " " + slot.sym + dir +
+        " 跳过：该账户单向持仓且已有反向仓位，市价反手会先平仓", "err");
+      return false;
+    }
+  }
+  const {qty, minNotional, mark} = await calcOpenQty(slot.sym);
+  autoLog("No." + slot.no + " " + acct.name + " · " + slot.sym + " " + dir +
+    " 开仓 " + trimNum(qty) + "（约 " + (qty * mark).toFixed(2) + " USDT，最少开仓 " + minNotional.toFixed(2) + "）…");
+  const res = await openPosition(key, secret, slot.sym, qty, slot.short ? "SHORT" : "LONG");
+  auto.opened++;
+  autoLog("No." + slot.no + " 开仓成功：" + slot.sym + " " + dir + " " + trimNum(qty) +
+    " 订单号 " + (res.orderId || "?"), "ok");
+  // 开完立刻重拉一次，确保后续判断用的是最新仓位
+  await refreshPositions({silent: true});
+  const occ = slotOccupied(slot);
+  if (occ === false) autoLog("复核：No." + slot.no + " 暂未显示持仓，请手动确认", "err");
+  else if (occ === true) autoLog("复核：No." + slot.no + " 持仓已生效", "ok");
+  return true;
+}
+
+async function autoCycle() {
+  if (!auto.running || auto.busy) return;
+  auto.busy = true;
+  auto.cd = AUTO_INTERVAL;
+  $("cdNum").textContent = auto.cd;
+  try {
+    if (!(await pingNet())) {
+      $("autoStat").textContent = "网络异常，本轮不开仓，等待恢复";
+      autoLog("网络异常，本轮跳过", "err");
+      return;
+    }
+    await refreshPositions({silent: true});   // 每轮都拉最新仓位
+    if (!state.data) { autoLog("仓位数据为空，本轮跳过", "err"); return; }
+    const accounts = state.data.accounts || [];
+    const okCount = accounts.filter(a => a.status === "ok").length;
+    if (!okCount) { autoLog("各账户仓位均获取失败，本轮不判断（不停止）", "err"); return; }
+    if (okCount < accounts.length) {
+      autoLog("部分账户未配置或获取失败（" + okCount + "/" + accounts.length + "），本轮不判定已全开满", "err");
+    }
+    const slot = scanFirstEmpty();
+    auto.nextSlot = slot;
+    showNextSlot(slot);
+    if (!slot) {
+      if (okCount < accounts.length) return;  // 数据不全，不敢判满
+      if (auto.failed.size) {
+        autoLog("剩余空位均已失败/跳过（" + auto.failed.size + " 个），自动停止，请手动处理", "err");
+        $("autoStat").textContent = "剩余空位无法自动开仓，已停止，请手动处理";
+      } else {
+        autoLog("所有空位已开满（" + accounts.length + " 个账户 × " + SLOT_PER_ACCOUNT + " 格），自动停止", "ok");
+        $("autoStat").textContent = "全部仓位已开满，已自动停止，等待人工操作";
+      }
+      stopAuto();
+      return;
+    }
+    $("autoStat").textContent = "运行中：序号扫描到 No." + slot.no + " 空仓，正在开仓…";
+    try {
+      if (!(await autoOpen(slot))) auto.failed.add(slot.no);
+    } catch (e) {
+      auto.failed.add(slot.no);
+      autoLog("No." + slot.no + " 开仓失败：" + ((e && e.message) || String(e)), "err");
+    }
+    if (auto.running) $("autoStat").textContent = "运行中：本轮处理完，等下一轮刷新";
+  } catch (e) {
+    autoLog("异常：" + ((e && e.message) || String(e)), "err");
+    $("autoStat").textContent = "异常：" + ((e && e.message) || String(e));
+  } finally {
+    auto.busy = false;
+    if (auto.running) $("cdNum").textContent = auto.cd;
+  }
+}
+
+function autoTick() {
+  if (!auto.running || auto.busy) return;
+  auto.cd--;
+  if (auto.cd <= 0) { autoCycle(); return; }
+  $("cdNum").textContent = auto.cd;
+}
+
+function startAuto() {
+  if (auto.running) return;
+  auto.running = true;
+  auto.cd = AUTO_INTERVAL;
+  auto.opened = 0;
+  auto.nextSlot = null;
+  auto.failed = new Set();
+  const btn = $("btnAuto");
+  btn.textContent = "停止";
+  btn.classList.remove("primary");
+  btn.classList.add("danger");
+  $("autoLog").classList.add("show");
+  $("cdNum").textContent = auto.cd;
+  setNet(null);
+  $("autoStat").textContent = "运行中：每 " + AUTO_INTERVAL + " 秒刷新一次，从 No.1 顺序补位，只开仓不加仓";
+  autoLog("开始自动开仓：每 " + AUTO_INTERVAL + " 秒刷新仓位，只开仓、不加仓、不平仓");
+  clearInterval(auto.timer);
+  auto.timer = setInterval(autoTick, 1000);
+  autoCycle();  // 第一轮立刻执行
+}
+
+function stopAuto() {
+  auto.running = false;
+  clearInterval(auto.timer);
+  auto.timer = null;
+  auto.cd = 0;
+  $("cdNum").textContent = "--";
+  showNextSlot(null);
+  const btn = $("btnAuto");
+  btn.textContent = "开始";
+  btn.classList.remove("danger");
+  btn.classList.add("primary");
+}
+
+function askStartAuto() {
+  const slot = state.data ? scanFirstEmpty() : null;
+  const acctCnt = state.data ? (state.data.accounts || []).length : accountList().length;
+  let body = "点击「开始」后：\n" +
+    "· 每 " + AUTO_INTERVAL + " 秒自动刷新一次各账户仓位，并显示读秒与网络状态\n" +
+    "· 编号规则：账户N 的 币USDT多 / 币USDT空 / 币USDC多 / 币USDC空 依次编号，账户之间连续编号\n" +
+    "· 每轮从 No.1 开始扫，遇到第一个空仓位就按最小仓位（最少开仓额 +1 USDT）市价开仓\n" +
+    "· 只开仓，不加仓、不平仓；全部格子开满后自动停止，等待人工操作\n" +
+    "· 编号会显示在每个交易对右上角，共 " + acctCnt + " 个账户 × " + SLOT_PER_ACCOUNT + " 格\n\n";
+  body += slot
+    ? "当前第一个空仓位：No." + slot.no + " · " + (state.data.accounts[slot.acctPos] || {}).name +
+      " · " + slot.sym + " · " + (slot.short ? "空单" : "多单")
+    : (state.data ? "当前没有可自动开仓的空位（或账户数据不可用）" : "尚未获取仓位，开始后先拉取一次再判断");
+  body += "\n\n真实资金市价开仓，确认开始？";
+  $("planTitle").textContent = "开始自动开仓确认";
+  $("planBody").textContent = body;
+  $("planMask").dataset.mode = "auto";
+  $("planMask").dataset.plan = "";
+  $("planMask").classList.add("show");
 }
 
 // ==================== 计划与执行 ====================
@@ -778,6 +1049,7 @@ async function onPlan(symbol, acctIdx, side) {
     }
     $("planTitle").textContent = title;
     $("planBody").textContent = body;
+    $("planMask").dataset.mode = "";
     $("planMask").dataset.plan = JSON.stringify(p);
     $("planMask").classList.add("show");
   } catch (e) {
@@ -787,10 +1059,12 @@ async function onPlan(symbol, acctIdx, side) {
 }
 
 async function onPlanOk() {
+  const mode = $("planMask").dataset.mode;
+  hide($("planMask"));
+  if (mode === "auto") { $("planMask").dataset.mode = ""; startAuto(); return; }
   const raw = $("planMask").dataset.plan;
   if (!raw) return;
   const p = JSON.parse(raw);
-  hide($("planMask"));
   const {key, secret} = keysFor(p.acctIdx);
   $("status").textContent = "正在执行：" + p.acctName + " · " + p.symbol + " …";
   let ok = true, msg;
@@ -811,11 +1085,11 @@ async function onPlanOk() {
 /* 保证操作后看到的一定是最新数据：
    先等上一次拉取结束（避免 onFetch 因 fetching 直接返回），再完整重拉一遍 */
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-async function refreshPositions() {
+async function refreshPositions(opts) {
   for (let i = 0; i < 60 && state.fetching; i++) await sleep(200);   // 最多等 12 秒
   if (state.fetching) return false;
   try {
-    return await onFetch() === true;
+    return await onFetch(opts) === true;
   } catch (e) {
     return false;
   }
@@ -900,7 +1174,9 @@ function render() {
       data.accounts.forEach((a, ai) => {
         ["USDT", "USDC"].forEach(quote => {
           const sym = base + quote;
-          html += "<td class='sym" + (ai > 0 && quote === "USDT" ? " acct-first" : "") + "'>" + esc(sym) + "</td>";
+          const no = slotToNo(ai, BASES.indexOf(base), quote === "USDT" ? 0 : 1, side === "SHORT");
+          html += "<td class='sym" + (ai > 0 && quote === "USDT" ? " acct-first" : "") + "'>" + esc(sym) +
+            "<span class='slotno'>" + no + "</span></td>";
           if (a.status === "ok") {
             const r = (side === "LONG" ? a.rows : a.rowsShort)[sym];
             if (r && r.notional > 0) {
@@ -1107,10 +1383,18 @@ function init() {
   $("status").textContent =
     "就绪：已加载 " + ALL_PAIRS.length + " 个交易对（" + state.groups.length + " 组可选），当前显示「" +
     state.groups[0].label + "」，点击「获取」拉取数据";
+  pingNet(); // 打开页面先测一次网络
 }
 
 // ---------------- 事件绑定 ----------------
-$("btnFetch").onclick = onFetch;
+$("btnFetch").onclick = () => onFetch();
+$("btnAuto").onclick = () => {
+  if (auto.running) {
+    stopAuto();
+    $("autoStat").textContent = "已停止，点击「开始」继续";
+    autoLog("手动停止自动开仓");
+  } else askStartAuto();
+};
 $("groupSel").onchange = applyGroup;
 $("btnFilter").onclick = toggleFilter;
 $("btnSettings").onclick = () => { buildSettings(); $("settingsMask").classList.add("show"); };
@@ -1118,7 +1402,7 @@ $("btnCloseSettings").onclick = () => hide($("settingsMask"));
 $("btnSave").onclick = onSaveSettings;
 $("btnAddAcct").onclick = addAccountRow;
 $("btnTest").onclick = onTest;
-$("btnPlanCancel").onclick = () => { hide($("planMask")); $("status").textContent = "已取消"; };
+$("btnPlanCancel").onclick = () => { $("planMask").dataset.mode = ""; hide($("planMask")); $("status").textContent = "已取消"; };
 $("btnPlanOk").onclick = onPlanOk;
 $("btnInfoOk").onclick = () => hide($("infoMask"));
 
