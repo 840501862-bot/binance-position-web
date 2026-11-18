@@ -206,14 +206,14 @@ const FAPI = "https://fapi.binance.com";            // USDⓈ-M 合约
 const MAX_ACCOUNT_COUNT = 20;                       // 账户数不固定，仅作上限保护
 const KEY_STORE = "bf_keys_v1";                     // localStorage 键名
 const SL_STORE = "bf_sl_orders_v1";                 // 本地止损单跟踪
-// 35 个基础币种（按交易对文件顺序，每组 USDT 在上、USDC 在下）
+// 37 个基础币种（按交易对文件顺序，每组 USDT 在上、USDC 在下）
 const BASES = ["NEO","ETHFI","1000BONK","ORDI","KAITO","BIO","WLFI","PNUT","BCH","BOME",
   "LTC","PENGU","CRV","TRUMP","HBAR","1000SHIB","WIF","UNI","SUI","WLD",
   "AVAX","1000PEPE","ARB","LINK","AAVE","ADA","SOL","ZEC","XRP","NEAR",
-  "BNB","ENA","FIL","DOGE","TIA"];
+  "BNB","ENA","FIL","DOGE","TIA","TRX","HYPE"];
 const ALL_PAIRS = [];
 BASES.forEach(b => { ALL_PAIRS.push(b + "USDT", b + "USDC"); });
-const MAX_COINS_PER_GROUP = 12;
+const MAX_COINS_PER_GROUP = 13;   // 37 币按 13/13/11 分为 3 组
 
 function buildPairGroups() {
   const n = Math.max(1, Math.ceil(BASES.length / MAX_COINS_PER_GROUP));
@@ -853,7 +853,7 @@ function toggleFilter() {
   $("groupSel").disabled = state.onlyAction;
   if (state.data) render();
   else {
-    $("summary").textContent = state.onlyAction ? "只看需加仓 / 开仓（全部 70 对）" : "全部交易对";
+    $("summary").textContent = state.onlyAction ? "只看需加仓 / 开仓（全部 " + ALL_PAIRS.length + " 对）" : "全部交易对";
   }
 }
 
@@ -949,7 +949,7 @@ function render() {
     }
   });
   if (filterInfo) {
-    $("status").textContent = "只看需加仓 / 开仓（全部 70 对）：显示 " + bases.length + " 个币，隐藏 " +
+    $("status").textContent = "只看需加仓 / 开仓（全部 " + ALL_PAIRS.length + " 对）：显示 " + bases.length + " 个币，隐藏 " +
       filterInfo.drop.length + " 个" + (parts.length ? " | " + parts.join(" | ") : "");
     $("summary").textContent = "整表汇总 · 同币 USDT/USDC 合并判断";
   } else {
