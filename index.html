@@ -676,7 +676,7 @@ async function onFetch(opts) {
     return true;
   } catch (e) {
     $("status").textContent = "获取失败：" + e.message;
-    if (silent) autoLog("获取失败：" + e.message, "err");
+    if (silent) autoLog("获取失败：" + e.message, "err", true);
     else showInfo("获取失败", String(e.message));
     return false;
   } finally {
@@ -741,14 +741,17 @@ function scanFirstEmpty(keepBases) {
   }
   return null;
 }
-function autoLog(text, cls) {
+// 日志：只保留最近 5 条（防占内存）；默认只显示「开仓成功」，其它过程信息不落日志
+function autoLog(text, cls, show) {
+  if (show === undefined) show = (cls === "ok");
+  if (!show) return;
   const box = $("autoLog");
   const d = document.createElement("div");
   d.className = cls || "";
   const t = new Date().toLocaleTimeString("zh-CN", {hour12: false});
   d.innerHTML = "<span class='t'>" + t + "</span>" + esc(text);
   box.appendChild(d);
-  while (box.children.length > 40) box.removeChild(box.firstChild);
+  while (box.children.length > 5) box.removeChild(box.firstChild);
   box.scrollTop = box.scrollHeight;
 }
 function setNet(ok) {
@@ -806,8 +809,8 @@ async function autoOpen(slot) {
   // 开完立刻重拉一次，确保后续判断用的是最新仓位
   await refreshPositions({silent: true});
   const occ = slotOccupied(slot);
-  if (occ === false) autoLog("复核：" + slot.base + " No." + slot.no + " 暂未显示持仓，请手动确认", "err");
-  else if (occ === true) autoLog("复核：" + slot.base + " No." + slot.no + " 持仓已生效", "ok");
+  if (occ === false) autoLog("复核：" + slot.base + " No." + slot.no + " 暂未显示持仓，请手动确认", "err", true);
+  else if (occ === true) autoLog("复核：" + slot.base + " No." + slot.no + " 持仓已生效", "ok", false);
   return true;
 }
 
@@ -845,11 +848,11 @@ async function autoCycle() {
       if (!(await autoOpen(slot))) auto.failed.add(slotKey(slot));
     } catch (e) {
       auto.failed.add(slotKey(slot));
-      autoLog(slot.base + " No." + slot.no + " 开仓失败：" + ((e && e.message) || String(e)), "err");
+      autoLog(slot.base + " No." + slot.no + " 开仓失败：" + ((e && e.message) || String(e)), "err", true);
     }
     if (auto.running) $("autoStat").textContent = "运行中：本轮处理完，等下一轮刷新";
   } catch (e) {
-    autoLog("异常：" + ((e && e.message) || String(e)), "err");
+    autoLog("异常：" + ((e && e.message) || String(e)), "err", true);
     $("autoStat").textContent = "异常：" + ((e && e.message) || String(e));
   } finally {
     auto.busy = false;
