@@ -145,9 +145,6 @@
   <label for="groupSel">币对分组</label>
   <select id="groupSel"></select>
   <button id="btnFetch" class="primary">获取</button>
-  <input type="text" id="paramA" placeholder="A" style="width:60px;text-align:center" spellcheck="false">
-  <input type="text" id="paramB" placeholder="B" style="width:60px;text-align:center" spellcheck="false">
-  <input type="text" id="paramC" placeholder="C" style="width:60px;text-align:center" spellcheck="false">
   <span id="status">就绪：正在加载配置…</span>
   <button id="btnFilter" title="切换「只看需加仓/开仓」与全部交易对">显示全部</button>
 </div>
@@ -242,11 +239,15 @@ const state = {
 const $ = id => document.getElementById(id);
 
 // ==================== 密钥管理（仅存本浏览器） ====================
+// 内存缓存：避免每次渲染都 JSON.parse 一遍 localStorage（表格按账户 × 交易对循环时调用很频繁）
+let keysCache = null;
 function loadKeys() {
-  try { return JSON.parse(localStorage.getItem(KEY_STORE) || "{}") || {}; }
-  catch (e) { return {}; }
+  if (keysCache) return keysCache;
+  try { keysCache = JSON.parse(localStorage.getItem(KEY_STORE) || "{}") || {}; }
+  catch (e) { keysCache = {}; }
+  return keysCache;
 }
-function saveKeys(keys) { localStorage.setItem(KEY_STORE, JSON.stringify(keys)); }
+function saveKeys(keys) { keysCache = keys; localStorage.setItem(KEY_STORE, JSON.stringify(keys)); }
 function keysFor(i) {
   const k = loadKeys()[i] || {};
   return {key: (k.key || "").trim(), secret: (k.secret || "").trim(), is5x: !!k.is5x};
@@ -539,7 +540,7 @@ async function cleanupStaleSl(key, secret, accountName, openSides) {
 
 // ==================== 获取（主流程，与桌面版同口径） ====================
 async function onFetch() {
-  if (state.fetching) return;
+  if (state.fetching) return false;   // 已在拉取：交给调用方决定是否等待重拉
   state.fetching = true;
   dualCache.clear(); // 每次获取重新确认持仓模式
   const btn = $("btnFetch");
@@ -626,9 +627,11 @@ async function onFetch() {
     });
     state.data = {order, bases: sortedBases, accounts, cleaned_total: cleanedTotal};
     render();
+    return true;
   } catch (e) {
     $("status").textContent = "获取失败：" + e.message;
     showInfo("获取失败", String(e.message));
+    return false;
   } finally {
     state.fetching = false;
     btn.disabled = false;
@@ -790,14 +793,31 @@ async function onPlanOk() {
   hide($("planMask"));
   const {key, secret} = keysFor(p.acctIdx);
   $("status").textContent = "正在执行：" + p.acctName + " · " + p.symbol + " …";
+  let ok = true, msg;
   try {
-    const msg = await executePlan(p, key, secret);
-    $("status").textContent = "交易已执行";
-    showInfo("执行成功", msg);
-    setTimeout(onFetch, 1200); // 自动刷新表格
+    msg = await executePlan(p, key, secret);
   } catch (e) {
-    $("status").textContent = "执行失败：" + e.message;
-    showInfo("执行失败", String(e.message));
+    ok = false;
+    msg = "执行失败：" + ((e && e.message) || String(e));
+  }
+  $("status").textContent = (ok ? "交易已执行" : "执行失败") + "，正在拉取最新仓位…";
+  const refreshed = await refreshPositions();
+  $("status").textContent = ok ? "交易已执行" : "执行失败";
+  showInfo(ok ? "执行成功" : "执行失败",
+    msg + "\n\n" + (refreshed ? "已重新拉取最新仓位，表格为最新数据。"
+                              : "自动刷新失败，请点「获取」重新拉取后再操作。"));
+}
+
+/* 保证操作后看到的一定是最新数据：
+   先等上一次拉取结束（避免 onFetch 因 fetching 直接返回），再完整重拉一遍 */
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function refreshPositions() {
+  for (let i = 0; i < 60 && state.fetching; i++) await sleep(200);   // 最多等 12 秒
+  if (state.fetching) return false;
+  try {
+    return await onFetch() === true;
+  } catch (e) {
+    return false;
   }
 }
 
