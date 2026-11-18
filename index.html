@@ -695,7 +695,6 @@ const SLOT_PER_ACCOUNT = BASES.length * 4;      // 每个账户的仓位格数
 const auto = {
   running: false, busy: false, cd: 0, timer: null,
   netOk: null, latency: 0, opened: 0, nextSlot: null, failed: new Set(),
-  lockBases: new Set(),   // 已判定符合开仓条件、正在补位的交易对
 };
 
 function slotToNo(acctPos, coinIdx, quoteIdx, short) {
@@ -722,31 +721,10 @@ function actionKeepBases(data) {
   if (!data) return [];
   return filterBases(data).keep.filter(b => BASES.indexOf(b) >= 0);
 }
-// 选中的交易对（自动开始后第一次被判定「符合开仓条件」就锁定，直到该币所有格子都开满才释放）
-// 这样同一个币在表格里消失后，仍会把它的空格继续补完；从未出现过的币永远不会被碰
+// 候选交易对 = 本轮拉到的最新数据里，仍然「符合开仓条件」的那些币（也就是表格里显示的那些）
+// 不做锁定：某个币开了一格后，新仓 ROI 回升 → 它就不再显示 → 后续轮次不会再碰它
 function autoCandidates(data) {
-  const flagged = actionKeepBases(data);
-  flagged.forEach(b => auto.lockBases.add(b));
-  auto.lockBases.forEach(b => {
-    const coinIdx = BASES.indexOf(b);
-    if (coinIdx < 0) { auto.lockBases.delete(b); return; }
-    if (allSlotsFull(b, coinIdx)) auto.lockBases.delete(b);
-  });
-  return Array.from(auto.lockBases).filter(b => BASES.indexOf(b) >= 0)
-    .sort((x, y) => BASES.indexOf(x) - BASES.indexOf(y));
-}
-function allSlotsFull(base, coinIdx) {
-  const accts = (state.data && state.data.accounts) || [];
-  for (let acctPos = 0; acctPos < accts.length; acctPos++) {
-    if (!accts[acctPos] || accts[acctPos].status !== "ok") continue;
-    for (let quoteIdx = 0; quoteIdx < 2; quoteIdx++) {
-      for (let shortI = 0; shortI < 2; shortI++) {
-        const slot = noToSlot(slotToNo(acctPos, coinIdx, quoteIdx, shortI === 1));
-        if (slotOccupied(slot) === false) return false;
-      }
-    }
-  }
-  return true;
+  return actionKeepBases(data);
 }
 // 从 1 号开始，在候选交易对里找第一个空仓位（失败/跳过的格子不再重试）
 function scanFirstEmpty(keepBases) {
@@ -853,7 +831,7 @@ async function autoCycle() {
     const accounts = state.data.accounts || [];
     const okCount = accounts.filter(a => a.status === "ok").length;
     if (!okCount) { autoLog("各账户仓位均获取失败，本轮不判断", "err"); return; }
-    // 只看表格里显示的那些「符合开仓条件」的交易对（一旦出现就锁定，直到该币格子开满），别的币一律不碰
+    // 只看表格里显示的那些「符合开仓条件」的交易对；开完一格后它若不再显示就不会再碰
     const keepBases = autoCandidates(state.data);
     const slot = scanFirstEmpty(keepBases);
     auto.nextSlot = slot;
@@ -863,7 +841,7 @@ async function autoCycle() {
       autoLog("当前没有符合开仓条件的空仓位" + why + "，符合条件交易对：" +
         (keepBases.length ? keepBases.join("、") : "无") + "，继续等待下一轮刷新", keepBases.length ? "" : "err");
       $("autoStat").textContent = "等待中：暂无可开仓的空位，每 " + AUTO_INTERVAL + " 秒刷新一次" +
-        (keepBases.length ? "（正在补位：" + keepBases.join("、") + "）" : "");
+        (keepBases.length ? "（当前符合条件：" + keepBases.join("、") + "）" : "");
       return;
     }
     $("autoStat").textContent = "运行中：序号扫描到 No." + slot.no + " 空仓，正在开仓…";
@@ -897,7 +875,6 @@ function startAuto() {
   auto.opened = 0;
   auto.nextSlot = null;
   auto.failed = new Set();
-  auto.lockBases = new Set();
   const btn = $("btnAuto");
   btn.textContent = "停止";
   btn.classList.remove("primary");
@@ -905,8 +882,8 @@ function startAuto() {
   $("autoLog").classList.add("show");
   $("cdNum").textContent = auto.cd;
   setNet(null);
-  $("autoStat").textContent = "运行中：每 " + AUTO_INTERVAL + " 秒刷新一次，只在符合条件的交易对里补空位，只开仓不加仓";
-  autoLog("开始自动开仓：每 " + AUTO_INTERVAL + " 秒刷新仓位，只对表格里显示（符合开仓条件）的交易对开仓，不加仓、不平仓");
+  $("autoStat").textContent = "运行中：每 " + AUTO_INTERVAL + " 秒刷新一次，只对当前表格里符合条件的交易对补空位，只开仓不加仓";
+  autoLog("开始自动开仓：每 " + AUTO_INTERVAL + " 秒刷新一次，一次只开一个格子；只对表格里显示（符合开仓条件）的交易对开仓，不加仓、不平仓");
   clearInterval(auto.timer);
   auto.timer = setInterval(autoTick, 1000);
   autoCycle();  // 第一轮立刻执行
@@ -932,7 +909,7 @@ function askStartAuto() {
     "· 每 " + AUTO_INTERVAL + " 秒自动刷新一次各账户仓位，并显示读秒与网络状态\n" +
     "· 只在「符合开仓条件」的交易对里开仓——就是表格里显示的那些币（同币所有账户/多空/USDT+USDC 整体判定），别的币一律不碰\n" +
     "· 每轮按 No.1 起的顺序扫这些交易对的格子，遇到第一个**没有仓位**的格子，按最小仓位（最少开仓额 +1 USDT）市价开仓\n" +
-    "· 某个币一旦出现过就锁定住，把它剩下的空格依次补完（该币格子全满后释放）；从未出现过的币一律不碰\n" +
+    "· 一次只开一个格子；开完立刻重拉，这个币的新仓 ROI 回升后就不再显示，后续轮次自然不会再碰；从未显示过的币一律不碰\n" +
     "· 只开仓，不加仓、不平仓；符合条件的空位都开完后就停在「等待中」，每 11 秒继续刷新，发现有新的符合条件交易对会自动开\n" +
     "· 每格编号显示在交易对右上角\n\n";
   body += "当前符合开仓条件的交易对：" + (keepBases.length ? keepBases.join("、") : "无") + "\n";
