@@ -687,28 +687,28 @@ async function onFetch(opts) {
 }
 
 // ==================== 自动开仓（按序号顺序补位，只开仓不加仓） ====================
-// 编号规则：账户1 的 币1USDT多=1、币1USDT空=2、币1USDC多=3、币1USDC空=4，然后币2…
-//           账户2 从 (账户1 总数+1) 接着排，依此类推。账户按设置里填了密钥的账户顺序排。
+// 编号规则：每个币单独一串编号。以 XRP 为例：
+//   账户1 XRPUSDT多=1、账户1 XRPUSDT空=2、账户1 XRPUSDC多=3、账户1 XRPUSDC空=4、
+//   账户2 XRPUSDT多=5、账户2 XRPUSDT空=6、账户2 XRPUSDC多=7、账户2 XRPUSDC空=8 ……
+// 其它币各自从 1 开始重新编号。账户按设置里填了密钥的账户顺序排。
 const AUTO_INTERVAL = 11;                       // 刷新间隔（秒）
-const SLOT_PER_ACCOUNT = BASES.length * 4;      // 每个账户的仓位格数
 
 const auto = {
   running: false, busy: false, cd: 0, timer: null,
   netOk: null, latency: 0, opened: 0, nextSlot: null, failed: new Set(),
 };
 
-function slotToNo(acctPos, coinIdx, quoteIdx, short) {
-  return acctPos * SLOT_PER_ACCOUNT + coinIdx * 4 + quoteIdx * 2 + (short ? 1 : 0) + 1;
+// 币内编号：每个账户占 4 格（USDT多、USDT空、USDC多、USDC空）
+function slotToNo(acctPos, quoteIdx, short) {
+  return acctPos * 4 + quoteIdx * 2 + (short ? 1 : 0) + 1;
 }
-function noToSlot(no) {
-  const idx = no - 1, per = SLOT_PER_ACCOUNT;
-  const acctPos = Math.floor(idx / per), rest = idx % per;
-  const coinIdx = Math.floor(rest / 4);
-  const quoteIdx = Math.floor((rest % 4) / 2);
-  const short = (rest % 2) === 1;
-  return {no, acctPos, coinIdx, quoteIdx, short,
-    sym: BASES[coinIdx] + (quoteIdx === 0 ? "USDT" : "USDC")};
+function noToSlot(no, base) {
+  const i = no - 1;
+  const acctPos = Math.floor(i / 4), rest = i % 4;
+  const quoteIdx = Math.floor(rest / 2), short = (rest % 2) === 1;
+  return {no, base, acctPos, quoteIdx, short, sym: base + (quoteIdx === 0 ? "USDT" : "USDC")};
 }
+function slotKey(slot) { return slot.base + "#" + slot.no; }
 // true=有仓 false=空仓 null=该账户数据不可用
 function slotOccupied(slot) {
   const acct = state.data && state.data.accounts && state.data.accounts[slot.acctPos];
@@ -726,21 +726,17 @@ function actionKeepBases(data) {
 function autoCandidates(data) {
   return actionKeepBases(data);
 }
-// 从 1 号开始，在候选交易对里找第一个空仓位（失败/跳过的格子不再重试）
+// 在候选交易对里，按「币内 1..N」的顺序找第一个空仓位（失败/跳过的格子不再重试）
 function scanFirstEmpty(keepBases) {
   const accts = (state.data && state.data.accounts) || [];
   const bases = keepBases || actionKeepBases(state.data);
-  for (let acctPos = 0; acctPos < accts.length; acctPos++) {
-    for (const base of bases) {
-      const coinIdx = BASES.indexOf(base);
-      for (let quoteIdx = 0; quoteIdx < 2; quoteIdx++) {
-        for (let shortI = 0; shortI < 2; shortI++) {
-          const no = slotToNo(acctPos, coinIdx, quoteIdx, shortI === 1);
-          if (auto.failed.has(no)) continue;
-          const slot = noToSlot(no);
-          if (slotOccupied(slot) === false) return slot;   // null = 未配置/获取失败，跳过
-        }
-      }
+  const total = accts.length * 4;
+  for (const base of bases) {
+    if (BASES.indexOf(base) < 0) continue;
+    for (let no = 1; no <= total; no++) {
+      const slot = noToSlot(no, base);
+      if (auto.failed.has(slotKey(slot))) continue;
+      if (slotOccupied(slot) === false) return slot;   // null = 未配置/获取失败，跳过
     }
   }
   return null;
@@ -779,7 +775,7 @@ async function pingNet() {
 function showNextSlot(slot) {
   if (!slot) { $("slotInfo").textContent = ""; return; }
   const acct = state.data.accounts[slot.acctPos];
-  $("slotInfo").textContent = "下一个待开：No." + slot.no + " " + (acct ? acct.name : "") +
+  $("slotInfo").textContent = "下一个待开：" + slot.base + " No." + slot.no + " " + (acct ? acct.name : "") +
     " " + slot.sym + " " + (slot.short ? "空单" : "多单");
 }
 // 开一个仓（市价、最小仓位，只开仓不加仓）；true=已开或可跳过，false=失败
@@ -795,23 +791,23 @@ async function autoOpen(slot) {
     let dual = false;
     try { dual = await getDualSide(key, secret); } catch (e) {}
     if (!dual) {
-      autoLog("No." + slot.no + " " + acct.name + " " + slot.sym + dir +
+      autoLog(slot.base + " No." + slot.no + " " + acct.name + " " + slot.sym + dir +
         " 跳过：该账户单向持仓且已有反向仓位，市价反手会先平仓", "err");
       return false;
     }
   }
   const {qty, minNotional, mark} = await calcOpenQty(slot.sym);
-  autoLog("No." + slot.no + " " + acct.name + " · " + slot.sym + " " + dir +
+  autoLog(slot.base + " No." + slot.no + " " + acct.name + " · " + slot.sym + " " + dir +
     " 开仓 " + trimNum(qty) + "（约 " + (qty * mark).toFixed(2) + " USDT，最少开仓 " + minNotional.toFixed(2) + "）…");
   const res = await openPosition(key, secret, slot.sym, qty, slot.short ? "SHORT" : "LONG");
   auto.opened++;
-  autoLog("No." + slot.no + " 开仓成功：" + slot.sym + " " + dir + " " + trimNum(qty) +
+  autoLog(slot.base + " No." + slot.no + " 开仓成功：" + slot.sym + " " + dir + " " + trimNum(qty) +
     " 订单号 " + (res.orderId || "?"), "ok");
   // 开完立刻重拉一次，确保后续判断用的是最新仓位
   await refreshPositions({silent: true});
   const occ = slotOccupied(slot);
-  if (occ === false) autoLog("复核：No." + slot.no + " 暂未显示持仓，请手动确认", "err");
-  else if (occ === true) autoLog("复核：No." + slot.no + " 持仓已生效", "ok");
+  if (occ === false) autoLog("复核：" + slot.base + " No." + slot.no + " 暂未显示持仓，请手动确认", "err");
+  else if (occ === true) autoLog("复核：" + slot.base + " No." + slot.no + " 持仓已生效", "ok");
   return true;
 }
 
@@ -844,12 +840,12 @@ async function autoCycle() {
         (keepBases.length ? "（当前符合条件：" + keepBases.join("、") + "）" : "");
       return;
     }
-    $("autoStat").textContent = "运行中：序号扫描到 No." + slot.no + " 空仓，正在开仓…";
+    $("autoStat").textContent = "运行中：序号扫描到 " + slot.base + " No." + slot.no + " 空仓，正在开仓…";
     try {
-      if (!(await autoOpen(slot))) auto.failed.add(slot.no);
+      if (!(await autoOpen(slot))) auto.failed.add(slotKey(slot));
     } catch (e) {
-      auto.failed.add(slot.no);
-      autoLog("No." + slot.no + " 开仓失败：" + ((e && e.message) || String(e)), "err");
+      auto.failed.add(slotKey(slot));
+      autoLog(slot.base + " No." + slot.no + " 开仓失败：" + ((e && e.message) || String(e)), "err");
     }
     if (auto.running) $("autoStat").textContent = "运行中：本轮处理完，等下一轮刷新";
   } catch (e) {
@@ -908,7 +904,8 @@ function askStartAuto() {
   let body = "点击「开始」后：\n" +
     "· 每 " + AUTO_INTERVAL + " 秒自动刷新一次各账户仓位，并显示读秒与网络状态\n" +
     "· 只在「符合开仓条件」的交易对里开仓——就是表格里显示的那些币（同币所有账户/多空/USDT+USDC 整体判定），别的币一律不碰\n" +
-    "· 每轮按 No.1 起的顺序扫这些交易对的格子，遇到第一个**没有仓位**的格子，按最小仓位（最少开仓额 +1 USDT）市价开仓\n" +
+    "· 每个币单独一串编号：账户1 的 币USDT多=1、币USDT空=2、币USDC多=3、币USDC空=4，账户2 接着 5、6、7、8……\n" +
+    "· 每轮按币内 No.1 起的顺序扫这些交易对的格子，遇到第一个**没有仓位**的格子，按最小仓位（最少开仓额 +1 USDT）市价开仓\n" +
     "· 一次只开一个格子；开完立刻重拉，这个币的新仓 ROI 回升后就不再显示，后续轮次自然不会再碰；从未显示过的币一律不碰\n" +
     "· 只开仓，不加仓、不平仓；符合条件的空位都开完后就停在「等待中」，每 11 秒继续刷新，发现有新的符合条件交易对会自动开\n" +
     "· 每格编号显示在交易对右上角\n\n";
@@ -1189,7 +1186,7 @@ function render() {
       data.accounts.forEach((a, ai) => {
         ["USDT", "USDC"].forEach(quote => {
           const sym = base + quote;
-          const no = slotToNo(ai, BASES.indexOf(base), quote === "USDT" ? 0 : 1, side === "SHORT");
+          const no = slotToNo(ai, quote === "USDT" ? 0 : 1, side === "SHORT");
           html += "<td class='sym" + (ai > 0 && quote === "USDT" ? " acct-first" : "") + "'>" + esc(sym) +
             "<span class='slotno'>" + no + "</span></td>";
           if (a.status === "ok") {
