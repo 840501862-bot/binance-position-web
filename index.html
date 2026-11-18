@@ -695,6 +695,7 @@ const SLOT_PER_ACCOUNT = BASES.length * 4;      // 每个账户的仓位格数
 const auto = {
   running: false, busy: false, cd: 0, timer: null,
   netOk: null, latency: 0, opened: 0, nextSlot: null, failed: new Set(),
+  lockBases: new Set(),   // 已判定符合开仓条件、正在补位的交易对
 };
 
 function slotToNo(acctPos, coinIdx, quoteIdx, short) {
@@ -716,14 +717,53 @@ function slotOccupied(slot) {
   const r = (slot.short ? acct.rowsShort : acct.rows)[slot.sym];
   return !!(r && r.notional > 0);
 }
-// 从 1 号开始找第一个空仓位（失败/跳过的格子不再重试）
-function scanFirstEmpty() {
+// 符合开仓条件的交易对 = 「只看需加仓/开仓」筛选后表格里显示的那些币（同币所有账户/多空/USDT+USDC 整体判定）
+function actionKeepBases(data) {
+  if (!data) return [];
+  return filterBases(data).keep.filter(b => BASES.indexOf(b) >= 0);
+}
+// 选中的交易对（自动开始后第一次被判定「符合开仓条件」就锁定，直到该币所有格子都开满才释放）
+// 这样同一个币在表格里消失后，仍会把它的空格继续补完；从未出现过的币永远不会被碰
+function autoCandidates(data) {
+  const flagged = actionKeepBases(data);
+  flagged.forEach(b => auto.lockBases.add(b));
+  auto.lockBases.forEach(b => {
+    const coinIdx = BASES.indexOf(b);
+    if (coinIdx < 0) { auto.lockBases.delete(b); return; }
+    if (allSlotsFull(b, coinIdx)) auto.lockBases.delete(b);
+  });
+  return Array.from(auto.lockBases).filter(b => BASES.indexOf(b) >= 0)
+    .sort((x, y) => BASES.indexOf(x) - BASES.indexOf(y));
+}
+function allSlotsFull(base, coinIdx) {
   const accts = (state.data && state.data.accounts) || [];
-  const totalAll = accts.length * SLOT_PER_ACCOUNT;
-  for (let no = 1; no <= totalAll; no++) {
-    if (auto.failed.has(no)) continue;
-    const slot = noToSlot(no);
-    if (slotOccupied(slot) === false) return slot;   // null = 未配置/获取失败，跳过
+  for (let acctPos = 0; acctPos < accts.length; acctPos++) {
+    if (!accts[acctPos] || accts[acctPos].status !== "ok") continue;
+    for (let quoteIdx = 0; quoteIdx < 2; quoteIdx++) {
+      for (let shortI = 0; shortI < 2; shortI++) {
+        const slot = noToSlot(slotToNo(acctPos, coinIdx, quoteIdx, shortI === 1));
+        if (slotOccupied(slot) === false) return false;
+      }
+    }
+  }
+  return true;
+}
+// 从 1 号开始，在候选交易对里找第一个空仓位（失败/跳过的格子不再重试）
+function scanFirstEmpty(keepBases) {
+  const accts = (state.data && state.data.accounts) || [];
+  const bases = keepBases || actionKeepBases(state.data);
+  for (let acctPos = 0; acctPos < accts.length; acctPos++) {
+    for (const base of bases) {
+      const coinIdx = BASES.indexOf(base);
+      for (let quoteIdx = 0; quoteIdx < 2; quoteIdx++) {
+        for (let shortI = 0; shortI < 2; shortI++) {
+          const no = slotToNo(acctPos, coinIdx, quoteIdx, shortI === 1);
+          if (auto.failed.has(no)) continue;
+          const slot = noToSlot(no);
+          if (slotOccupied(slot) === false) return slot;   // null = 未配置/获取失败，跳过
+        }
+      }
+    }
   }
   return null;
 }
@@ -812,23 +852,18 @@ async function autoCycle() {
     if (!state.data) { autoLog("仓位数据为空，本轮跳过", "err"); return; }
     const accounts = state.data.accounts || [];
     const okCount = accounts.filter(a => a.status === "ok").length;
-    if (!okCount) { autoLog("各账户仓位均获取失败，本轮不判断（不停止）", "err"); return; }
-    if (okCount < accounts.length) {
-      autoLog("部分账户未配置或获取失败（" + okCount + "/" + accounts.length + "），本轮不判定已全开满", "err");
-    }
-    const slot = scanFirstEmpty();
+    if (!okCount) { autoLog("各账户仓位均获取失败，本轮不判断", "err"); return; }
+    // 只看表格里显示的那些「符合开仓条件」的交易对（一旦出现就锁定，直到该币格子开满），别的币一律不碰
+    const keepBases = autoCandidates(state.data);
+    const slot = scanFirstEmpty(keepBases);
     auto.nextSlot = slot;
     showNextSlot(slot);
     if (!slot) {
-      if (okCount < accounts.length) return;  // 数据不全，不敢判满
-      if (auto.failed.size) {
-        autoLog("剩余空位均已失败/跳过（" + auto.failed.size + " 个），自动停止，请手动处理", "err");
-        $("autoStat").textContent = "剩余空位无法自动开仓，已停止，请手动处理";
-      } else {
-        autoLog("所有空位已开满（" + accounts.length + " 个账户 × " + SLOT_PER_ACCOUNT + " 格），自动停止", "ok");
-        $("autoStat").textContent = "全部仓位已开满，已自动停止，等待人工操作";
-      }
-      stopAuto();
+      const why = auto.failed.size ? "（" + auto.failed.size + " 个格子开仓失败已跳过）" : "";
+      autoLog("当前没有符合开仓条件的空仓位" + why + "，符合条件交易对：" +
+        (keepBases.length ? keepBases.join("、") : "无") + "，继续等待下一轮刷新", keepBases.length ? "" : "err");
+      $("autoStat").textContent = "等待中：暂无可开仓的空位，每 " + AUTO_INTERVAL + " 秒刷新一次" +
+        (keepBases.length ? "（正在补位：" + keepBases.join("、") + "）" : "");
       return;
     }
     $("autoStat").textContent = "运行中：序号扫描到 No." + slot.no + " 空仓，正在开仓…";
@@ -862,6 +897,7 @@ function startAuto() {
   auto.opened = 0;
   auto.nextSlot = null;
   auto.failed = new Set();
+  auto.lockBases = new Set();
   const btn = $("btnAuto");
   btn.textContent = "停止";
   btn.classList.remove("primary");
@@ -869,8 +905,8 @@ function startAuto() {
   $("autoLog").classList.add("show");
   $("cdNum").textContent = auto.cd;
   setNet(null);
-  $("autoStat").textContent = "运行中：每 " + AUTO_INTERVAL + " 秒刷新一次，从 No.1 顺序补位，只开仓不加仓";
-  autoLog("开始自动开仓：每 " + AUTO_INTERVAL + " 秒刷新仓位，只开仓、不加仓、不平仓");
+  $("autoStat").textContent = "运行中：每 " + AUTO_INTERVAL + " 秒刷新一次，只在符合条件的交易对里补空位，只开仓不加仓";
+  autoLog("开始自动开仓：每 " + AUTO_INTERVAL + " 秒刷新仓位，只对表格里显示（符合开仓条件）的交易对开仓，不加仓、不平仓");
   clearInterval(auto.timer);
   auto.timer = setInterval(autoTick, 1000);
   autoCycle();  // 第一轮立刻执行
@@ -890,18 +926,20 @@ function stopAuto() {
 }
 
 function askStartAuto() {
-  const slot = state.data ? scanFirstEmpty() : null;
-  const acctCnt = state.data ? (state.data.accounts || []).length : accountList().length;
+  const keepBases = state.data ? actionKeepBases(state.data) : [];
+  const slot = state.data ? scanFirstEmpty(keepBases) : null;
   let body = "点击「开始」后：\n" +
     "· 每 " + AUTO_INTERVAL + " 秒自动刷新一次各账户仓位，并显示读秒与网络状态\n" +
-    "· 编号规则：账户N 的 币USDT多 / 币USDT空 / 币USDC多 / 币USDC空 依次编号，账户之间连续编号\n" +
-    "· 每轮从 No.1 开始扫，遇到第一个空仓位就按最小仓位（最少开仓额 +1 USDT）市价开仓\n" +
-    "· 只开仓，不加仓、不平仓；全部格子开满后自动停止，等待人工操作\n" +
-    "· 编号会显示在每个交易对右上角，共 " + acctCnt + " 个账户 × " + SLOT_PER_ACCOUNT + " 格\n\n";
+    "· 只在「符合开仓条件」的交易对里开仓——就是表格里显示的那些币（同币所有账户/多空/USDT+USDC 整体判定），别的币一律不碰\n" +
+    "· 每轮按 No.1 起的顺序扫这些交易对的格子，遇到第一个**没有仓位**的格子，按最小仓位（最少开仓额 +1 USDT）市价开仓\n" +
+    "· 某个币一旦出现过就锁定住，把它剩下的空格依次补完（该币格子全满后释放）；从未出现过的币一律不碰\n" +
+    "· 只开仓，不加仓、不平仓；符合条件的空位都开完后就停在「等待中」，每 11 秒继续刷新，发现有新的符合条件交易对会自动开\n" +
+    "· 每格编号显示在交易对右上角\n\n";
+  body += "当前符合开仓条件的交易对：" + (keepBases.length ? keepBases.join("、") : "无") + "\n";
   body += slot
-    ? "当前第一个空仓位：No." + slot.no + " · " + (state.data.accounts[slot.acctPos] || {}).name +
+    ? "第一个待开仓位：No." + slot.no + " · " + (state.data.accounts[slot.acctPos] || {}).name +
       " · " + slot.sym + " · " + (slot.short ? "空单" : "多单")
-    : (state.data ? "当前没有可自动开仓的空位（或账户数据不可用）" : "尚未获取仓位，开始后先拉取一次再判断");
+    : (state.data ? "当前没有可开仓的空位（或账户数据不可用）" : "尚未获取仓位，开始后先拉取一次再判断");
   body += "\n\n真实资金市价开仓，确认开始？";
   $("planTitle").textContent = "开始自动开仓确认";
   $("planBody").textContent = body;
