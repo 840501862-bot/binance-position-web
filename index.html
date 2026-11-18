@@ -691,11 +691,12 @@ async function onFetch(opts) {
 //   账户1 XRPUSDT多=1、账户1 XRPUSDT空=2、账户1 XRPUSDC多=3、账户1 XRPUSDC空=4、
 //   账户2 XRPUSDT多=5、账户2 XRPUSDT空=6、账户2 XRPUSDC多=7、账户2 XRPUSDC空=8 ……
 // 其它币各自从 1 开始重新编号。账户按设置里填了密钥的账户顺序排。
-const AUTO_INTERVAL = 11;                       // 刷新间隔（秒）
+const AUTO_INTERVAL = 11;          // 刷新间隔（秒）
+const MAX_TRY_PER_CYCLE = 5;       // 一轮里最多尝试 5 个格子（失败/跳过就换下一条）
 
 const auto = {
   running: false, busy: false, cd: 0, timer: null,
-  netOk: null, latency: 0, opened: 0, nextSlot: null, failed: new Set(),
+  latency: 0, failed: new Set(),   // failed: 开仓失败/跳过、本批次不再重试的格子
 };
 
 // 币内编号：每个账户占 4 格（USDT多、USDT空、USDC多、USDC空）
@@ -717,14 +718,10 @@ function slotOccupied(slot) {
   return !!(r && r.notional > 0);
 }
 // 符合开仓条件的交易对 = 「只看需加仓/开仓」筛选后表格里显示的那些币（同币所有账户/多空/USDT+USDC 整体判定）
+// 每轮现算：某个币开了一格后新仓 ROI 回升 → 它就不再显示 → 后续轮次不会再碰
 function actionKeepBases(data) {
   if (!data) return [];
   return filterBases(data).keep.filter(b => BASES.indexOf(b) >= 0);
-}
-// 候选交易对 = 本轮拉到的最新数据里，仍然「符合开仓条件」的那些币（也就是表格里显示的那些）
-// 不做锁定：某个币开了一格后，新仓 ROI 回升 → 它就不再显示 → 后续轮次不会再碰它
-function autoCandidates(data) {
-  return actionKeepBases(data);
 }
 // 在候选交易对里，按「币内 1..N」的顺序找第一个空仓位（失败/跳过的格子不再重试）
 function scanFirstEmpty(keepBases) {
@@ -755,7 +752,6 @@ function autoLog(text, cls, show) {
   box.scrollTop = box.scrollHeight;
 }
 function setNet(ok) {
-  auto.netOk = ok;
   const pill = $("netPill");
   pill.classList.toggle("ok", ok === true);
   pill.classList.toggle("bad", ok === false);
@@ -781,13 +777,13 @@ function showNextSlot(slot) {
   $("slotInfo").textContent = "下一个待开：" + slot.base + " No." + slot.no + " " + (acct ? acct.name : "") +
     " " + slot.sym + " " + (slot.short ? "空单" : "多单");
 }
-// 开一个仓（市价、最小仓位，只开仓不加仓）；true=已开或可跳过，false=失败
+// 开一个仓（市价、最小仓位，只开仓不加仓）。返回 true=真的下了单，false=跳过/失败（由调用方换下一条）
 async function autoOpen(slot) {
   const acct = state.data.accounts[slot.acctPos];
-  if (!acct || acct.status !== "ok") return true;
+  if (!acct || acct.status !== "ok") return false;
   const dir = slot.short ? "空单" : "多单";
   const {key, secret} = keysFor(acct.idx);
-  if (!key || !secret) return true;
+  if (!key || !secret) return false;
   // 单向持仓模式下，反向市价单会先把原持仓平掉，这种格子不自动开
   const opp = (slot.short ? acct.rows : acct.rowsShort)[slot.sym];
   if (opp && opp.notional > 0) {
@@ -795,23 +791,50 @@ async function autoOpen(slot) {
     try { dual = await getDualSide(key, secret); } catch (e) {}
     if (!dual) {
       autoLog(slot.base + " No." + slot.no + " " + acct.name + " " + slot.sym + dir +
-        " 跳过：该账户单向持仓且已有反向仓位，市价反手会先平仓", "err");
+        " 跳过：单向持仓且已有反向仓位，市价反手会先平仓", "err", true);
       return false;
     }
   }
   const {qty, minNotional, mark} = await calcOpenQty(slot.sym);
-  autoLog(slot.base + " No." + slot.no + " " + acct.name + " · " + slot.sym + " " + dir +
-    " 开仓 " + trimNum(qty) + "（约 " + (qty * mark).toFixed(2) + " USDT，最少开仓 " + minNotional.toFixed(2) + "）…");
   const res = await openPosition(key, secret, slot.sym, qty, slot.short ? "SHORT" : "LONG");
-  auto.opened++;
   autoLog(slot.base + " No." + slot.no + " 开仓成功：" + slot.sym + " " + dir + " " + trimNum(qty) +
-    " 订单号 " + (res.orderId || "?"), "ok");
+    "（约 " + (qty * mark).toFixed(2) + " USDT，订单号 " + (res.orderId || "?") + "）", "ok");
   // 开完立刻重拉一次，确保后续判断用的是最新仓位
   await refreshPositions({silent: true});
   const occ = slotOccupied(slot);
-  if (occ === false) autoLog("复核：" + slot.base + " No." + slot.no + " 暂未显示持仓，请手动确认", "err", true);
-  else if (occ === true) autoLog("复核：" + slot.base + " No." + slot.no + " 持仓已生效", "ok", false);
+  if (occ === false) {
+    autoLog("复核：" + slot.base + " No." + slot.no + " 暂未显示持仓，请手动确认", "err", true);
+    return false;   // 没落到仓位上，当失败处理，换下一条
+  }
   return true;
+}
+
+// 一轮的开仓动作：只成功开一个；遇到异常/跳过就记录并换下一条，最多试 MAX_TRY_PER_CYCLE 次
+async function openOnePerCycle() {
+  let tried = 0;
+  while (tried < MAX_TRY_PER_CYCLE && auto.running) {
+    const keepBases = actionKeepBases(state.data);
+    const slot = scanFirstEmpty(keepBases);
+    showNextSlot(slot);
+    if (!slot) {
+      $("autoStat").textContent = "等待中：暂无可开仓的空位，每 " + AUTO_INTERVAL + " 秒刷新一次" +
+        (keepBases.length ? "（当前符合条件：" + keepBases.join("、") + "）" : "");
+      return;
+    }
+    tried++;
+    $("autoStat").textContent = "运行中：" + slot.base + " No." + slot.no + " " + slot.sym +
+      " " + (slot.short ? "空单" : "多单") + " 正在开仓…";
+    try {
+      if (await autoOpen(slot)) return;                            // 成功开一个就收手
+      auto.failed.add(slotKey(slot));                              // 跳过（如单向持仓冲突）
+    } catch (e) {
+      auto.failed.add(slotKey(slot));
+      autoLog(slot.base + " No." + slot.no + " 开仓异常，跳过下一条：" +
+        ((e && e.message) || String(e)), "err", true);
+      await sleep(600);                                            // 稍等，避免连续打接口
+    }
+  }
+  if (tried >= MAX_TRY_PER_CYCLE) $("autoStat").textContent = "运行中：本轮连续失败 " + tried + " 次，下一轮再试";
 }
 
 async function autoCycle() {
@@ -820,40 +843,23 @@ async function autoCycle() {
   auto.cd = AUTO_INTERVAL;
   $("cdNum").textContent = auto.cd;
   try {
-    if (!(await pingNet())) {
-      $("autoStat").textContent = "网络异常，本轮不开仓，等待恢复";
-      autoLog("网络异常，本轮跳过", "err");
+    // refreshPositions 内部会先 ping 一次（刷新网络灯），再拉各账户仓位
+    if (!(await refreshPositions({silent: true})) || !state.data) {
+      $("autoStat").textContent = "获取仓位失败，本轮跳过";
       return;
     }
-    await refreshPositions({silent: true});   // 每轮都拉最新仓位
-    if (!state.data) { autoLog("仓位数据为空，本轮跳过", "err"); return; }
     const accounts = state.data.accounts || [];
-    const okCount = accounts.filter(a => a.status === "ok").length;
-    if (!okCount) { autoLog("各账户仓位均获取失败，本轮不判断", "err"); return; }
-    // 只看表格里显示的那些「符合开仓条件」的交易对；开完一格后它若不再显示就不会再碰
-    const keepBases = autoCandidates(state.data);
-    const slot = scanFirstEmpty(keepBases);
-    auto.nextSlot = slot;
-    showNextSlot(slot);
-    if (!slot) {
-      const why = auto.failed.size ? "（" + auto.failed.size + " 个格子开仓失败已跳过）" : "";
-      autoLog("当前没有符合开仓条件的空仓位" + why + "，符合条件交易对：" +
-        (keepBases.length ? keepBases.join("、") : "无") + "，继续等待下一轮刷新", keepBases.length ? "" : "err");
-      $("autoStat").textContent = "等待中：暂无可开仓的空位，每 " + AUTO_INTERVAL + " 秒刷新一次" +
-        (keepBases.length ? "（当前符合条件：" + keepBases.join("、") + "）" : "");
+    if (!accounts.some(a => a.status === "ok")) {
+      $("autoStat").textContent = "各账户仓位均获取失败，本轮跳过";
       return;
     }
-    $("autoStat").textContent = "运行中：序号扫描到 " + slot.base + " No." + slot.no + " 空仓，正在开仓…";
-    try {
-      if (!(await autoOpen(slot))) auto.failed.add(slotKey(slot));
-    } catch (e) {
-      auto.failed.add(slotKey(slot));
-      autoLog(slot.base + " No." + slot.no + " 开仓失败：" + ((e && e.message) || String(e)), "err", true);
+    await openOnePerCycle();
+    if (auto.running && $("autoStat").textContent.indexOf("正在开仓") >= 0) {
+      $("autoStat").textContent = "运行中：本轮处理完，等下一轮刷新";
     }
-    if (auto.running) $("autoStat").textContent = "运行中：本轮处理完，等下一轮刷新";
   } catch (e) {
-    autoLog("异常：" + ((e && e.message) || String(e)), "err", true);
-    $("autoStat").textContent = "异常：" + ((e && e.message) || String(e));
+    autoLog("运行异常：" + ((e && e.message) || String(e)), "err", true);
+    $("autoStat").textContent = "运行异常：" + ((e && e.message) || String(e));
   } finally {
     auto.busy = false;
     if (auto.running) $("cdNum").textContent = auto.cd;
@@ -871,8 +877,6 @@ function startAuto() {
   if (auto.running) return;
   auto.running = true;
   auto.cd = AUTO_INTERVAL;
-  auto.opened = 0;
-  auto.nextSlot = null;
   auto.failed = new Set();
   const btn = $("btnAuto");
   btn.textContent = "停止";
@@ -881,8 +885,7 @@ function startAuto() {
   $("autoLog").classList.add("show");
   $("cdNum").textContent = auto.cd;
   setNet(null);
-  $("autoStat").textContent = "运行中：每 " + AUTO_INTERVAL + " 秒刷新一次，只对当前表格里符合条件的交易对补空位，只开仓不加仓";
-  autoLog("开始自动开仓：每 " + AUTO_INTERVAL + " 秒刷新一次，一次只开一个格子；只对表格里显示（符合开仓条件）的交易对开仓，不加仓、不平仓");
+  $("autoStat").textContent = "运行中：每 " + AUTO_INTERVAL + " 秒刷新一次，只在表格里符合条件的交易对补空位，只开仓不加仓";
   clearInterval(auto.timer);
   auto.timer = setInterval(autoTick, 1000);
   autoCycle();  // 第一轮立刻执行
@@ -909,7 +912,8 @@ function askStartAuto() {
     "· 只在「符合开仓条件」的交易对里开仓——就是表格里显示的那些币（同币所有账户/多空/USDT+USDC 整体判定），别的币一律不碰\n" +
     "· 每个币单独一串编号：账户1 的 币USDT多=1、币USDT空=2、币USDC多=3、币USDC空=4，账户2 接着 5、6、7、8……\n" +
     "· 每轮按币内 No.1 起的顺序扫这些交易对的格子，遇到第一个**没有仓位**的格子，按最小仓位（最少开仓额 +1 USDT）市价开仓\n" +
-    "· 一次只开一个格子；开完立刻重拉，这个币的新仓 ROI 回升后就不再显示，后续轮次自然不会再碰；从未显示过的币一律不碰\n" +
+    "· 一次只开一个格子；开的时候如果报错/被跳过，自动换下一条试（一轮最多试 " + MAX_TRY_PER_CYCLE + " 个）\n" +
+    "· 开完立刻重拉，这个币的新仓 ROI 回升后就不再显示，后续轮次自然不会再碰；从未显示过的币一律不碰\n" +
     "· 只开仓，不加仓、不平仓；符合条件的空位都开完后就停在「等待中」，每 11 秒继续刷新，发现有新的符合条件交易对会自动开\n" +
     "· 每格编号显示在交易对右上角\n\n";
   body += "当前符合开仓条件的交易对：" + (keepBases.length ? keepBases.join("、") : "无") + "\n";
