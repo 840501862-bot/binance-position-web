@@ -188,7 +188,7 @@
   <span class="netpill" id="netPill"><i class="dot"></i><span id="netText">网络检测中…</span></span>
   <button id="btnAuto" class="primary">开始</button>
   <span class="cd">刷新倒计时 <b id="cdNum">--</b> 秒</span>
-  <span class="autostat" id="autoStat">未开始：点击「开始」后每 11 秒刷新一次，按序号补位开仓</span>
+  <span class="autostat" id="autoStat">未开始：点击「开始」后每 5 秒刷新一次，按序号补位开仓</span>
   <span class="slot" id="slotInfo"></span>
 </div>
 <div class="autolog" id="autoLog"></div>
@@ -691,7 +691,7 @@ async function onFetch(opts) {
 //   账户1 XRPUSDT多=1、账户1 XRPUSDT空=2、账户1 XRPUSDC多=3、账户1 XRPUSDC空=4、
 //   账户2 XRPUSDT多=5、账户2 XRPUSDT空=6、账户2 XRPUSDC多=7、账户2 XRPUSDC空=8 ……
 // 其它币各自从 1 开始重新编号。账户按设置里填了密钥的账户顺序排。
-const AUTO_INTERVAL = 11;          // 刷新间隔（秒）
+const AUTO_INTERVAL = 5;           // 刷新间隔（秒）
 const MAX_TRY_PER_CYCLE = 5;       // 一轮里最多尝试 5 个格子（失败/跳过就换下一条）
 
 const auto = {
@@ -914,7 +914,7 @@ function askStartAuto() {
     "· 每轮按币内 No.1 起的顺序扫这些交易对的格子，遇到第一个**没有仓位**的格子，按最小仓位（最少开仓额 +1 USDT）市价开仓\n" +
     "· 一次只开一个格子；开的时候如果报错/被跳过，自动换下一条试（一轮最多试 " + MAX_TRY_PER_CYCLE + " 个）\n" +
     "· 开完立刻重拉，这个币的新仓 ROI 回升后就不再显示，后续轮次自然不会再碰；从未显示过的币一律不碰\n" +
-    "· 只开仓，不加仓、不平仓；符合条件的空位都开完后就停在「等待中」，每 11 秒继续刷新，发现有新的符合条件交易对会自动开\n" +
+    "· 只开仓，不加仓、不平仓；符合条件的空位都开完后就停在「等待中」，每 5 秒继续刷新，发现有新的符合条件交易对会自动开\n" +
     "· 每格编号显示在交易对右上角\n\n";
   body += "当前符合开仓条件的交易对：" + (keepBases.length ? keepBases.join("、") : "无") + "\n";
   body += slot
